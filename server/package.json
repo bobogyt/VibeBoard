@@ -1,0 +1,26 @@
+{
+  "name": "vibeboard-server",
+  "private": true,
+  "version": "0.0.0",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "watch": "tsc -p tsconfig.json --watch",
+    "start": "node --env-file=.env dist/main.js",
+    "dev": "npm run build && node --env-file=.env --watch dist/main.js"
+  },
+  "dependencies": {
+    "@nestjs/common": "^11.1.6",
+    "@nestjs/core": "^11.1.6",
+    "@nestjs/platform-express": "^11.1.6",
+    "express": "^5.2.1",
+    "ioredis": "^6.0.0",
+    "mysql2": "^3.24.4",
+    "reflect-metadata": "^0.2.2",
+    "rxjs": "^7.8.1"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.1",
+    "@types/node": "^24.13.3",
+    "typescript": "~6.0.2"
+  }
+}

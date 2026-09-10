@@ -21,15 +21,15 @@ await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve))
 const { port } = server.address()
 process.env.GLM_BASE_URL = `http://127.0.0.1:${port}`
 
-const { initDb, pool } = await import('../src/db.js')
-const { registerAllTools } = await import('../src/agent/tools/index.js')
-const { listSchemas } = await import('../src/agent/registry.js')
-const { runAgent, getAgentSession } = await import('../src/agent/harness.js')
-const { resolveApproval } = await import('../src/agent/approvals.js')
-const taskService = await import('../src/services/taskService.js')
-const memoryService = await import('../src/services/memoryService.js')
-const projectService = await import('../src/services/projectService.js')
-const modelConfigService = await import('../src/services/modelConfigService.js')
+const { initDb, pool } = await import('../dist/db.js')
+const { registerAllTools } = await import('../dist/agent/tools/index.js')
+const { listSchemas } = await import('../dist/agent/registry.js')
+const { runAgent, getAgentSession } = await import('../dist/agent/harness.js')
+const { resolveApproval } = await import('../dist/agent/approvals.js')
+const taskService = await import('../dist/services/taskService.js')
+const memoryService = await import('../dist/services/memoryService.js')
+const projectService = await import('../dist/services/projectService.js')
+const modelConfigService = await import('../dist/services/modelConfigService.js')
 const { randomUUID } = await import('node:crypto')
 
 registerAllTools()
@@ -241,7 +241,7 @@ const t3 = await taskService.createTask(userId, { title: '已完成任务', stat
   check('依赖:归档后悬挂引用清理', (await taskService.getTask(userId, depB.id)).dependsOn.length === 0)
 
   // saveBoard 兜底(客户端全量保存路径是该路径唯一的依赖校验点):环拒绝 + 悬挂/自引用剔除
-  const board = await import('../src/board.js')
+  const board = await import('../dist/board.js')
   const COLUMN_IDS = ['todo', 'doing', 'done']
   const cyc1 = await taskService.createTask(userId, { title: '环-A' })
   const cyc2 = await taskService.createTask(userId, { title: '环-B' })

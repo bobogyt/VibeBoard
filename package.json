@@ -5,8 +5,10 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "server": "node --env-file=server/.env --watch server/src/index.js",
+    "server": "npm --prefix server run dev",
+    "server:start": "npm --prefix server run start",
     "build": "tsc -b && vite build",
+    "build:server": "npm --prefix server run build",
     "lint": "oxlint",
     "preview": "vite preview"
   },
@@ -15,9 +17,6 @@
     "@dnd-kit/core": "^6.3.1",
     "@dnd-kit/sortable": "^10.0.0",
     "antd": "^6.6.3",
-    "express": "^5.2.1",
-    "ioredis": "^6.0.0",
-    "mysql2": "^3.24.4",
     "react": "^19.2.8",
     "react-dom": "^19.2.8",
     "react-router": "^7.18.3"

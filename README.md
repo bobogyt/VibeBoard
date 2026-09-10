@@ -5,10 +5,10 @@
 ## 技术栈
 
 - **前端**:React 19 + TypeScript(strict)+ Vite + **Ant Design 6** + react-router 7 + @dnd-kit(拖拽)
-- **后端**:Node + Express(`server/`,纯 JS ESM,零构建)
+- **后端**:**NestJS 11 + TypeScript(strict)**(`server/`,独立 npm 工程,tsc 构建到 server/dist;Controller/Guard/异常过滤器只做 HTTP 适配,业务层为纯函数服务)
 - **存储**:MySQL(用户与任务持久化)+ Redis(登录会话、看板读缓存)
 - **认证**:Node 内置 `crypto.scrypt` 密码哈希;随机 token 会话存 Redis,TTL 7 天滑动续期;密码最短 8 位;登录/注册接口限速(登录同 IP+用户名 10 分钟 8 次,注册同 IP 每小时 10 次);登录失败统一话术且恒定时长校验,不泄露用户名是否存在
-- **AI Agent**:自研轻量 Agent Harness(`server/src/agent/`,Model + Tools + Loop + Guardrails),调 GLM OpenAI 兼容接口(纯 fetch 零依赖),工具分 READ / SAFE_WRITE 两级,带步数上限、重复失败守卫与结构化 trace
+- **AI Agent**:自研轻量 Agent Harness(`server/src/agent/`,框架无关,Model + Tools + Loop + Guardrails + Human Approval),调 GLM OpenAI 兼容接口(纯 fetch 零依赖),工具分 READ / SAFE_WRITE / HIGH_RISK 三级,带步数上限、重复失败守卫与结构化 trace
 
 ## 启动
 
@@ -16,15 +16,17 @@
 2. 数据库连接建议走 SSH 隧道,不要把 3306/6379 暴露公网
 
 ```bash
-npm install
-npm run server    # 终端 1:后端 API,默认 http://localhost:3000(启动时自动建表)
-npm run dev       # 终端 2:前端,http://localhost:5173(/api 由 Vite 代理)
+npm install                      # 根(前端)依赖
+npm install --prefix server      # 后端依赖(server/ 是独立 npm 工程)
+npm run server                   # 终端 1:后端 API(默认 http://localhost:3000,构建 + watch 启动,启动时自动建表)
+npm run dev                      # 终端 2:前端,http://localhost:5173(/api 由 Vite 代理)
 ```
 
 生产构建:
 
 ```bash
-npm run build     # 前端类型检查 + 打包
+npm run build         # 前端类型检查 + 打包
+npm run build:server  # 后端 tsc 构建到 server/dist(npm run server:start 运行)
 npm run preview
 ```
 
@@ -40,8 +42,8 @@ npm run preview
 - **任务动态时间线**:看板工具栏打开「任务动态」抽屉,全部任务按最近更新倒序展示,节点颜色区分所在列,显示所属项目与描述
   - 通用 `TimelineView` 组件被项目管理时间线与任务动态共用,各自组装不同的条目内容
 - **AI 助手(Agent Harness)**:看板工具栏「AI 助手」打开对话抽屉,用自然语言让 Agent 自主操作任务
-  - 架构:GLM(OpenAI 兼容接口)→ AgentHarness(循环)→ ToolExecutor(校验/风险检查)→ 8 个 Tool → 业务 Service → MySQL;业务层与 Harness 完全解耦
-  - 工具:只读 getProjects / getProject / getTasks / getTask;安全写 createTask / updateTask / moveTask / updateTaskPriority;无 deleteTask 等高危工具,模型无法越权
+  - 架构:GLM(OpenAI 兼容接口)→ AgentHarness(循环)→ ToolExecutor(校验/风险检查)→ 16 个 Tool → 业务 Service → MySQL;业务层与 Harness 完全解耦
+  - 工具:只读 getProjects / getProject / getTasks / getTask / getPreferences;安全写 createTask / updateTask / moveTask / updateTaskPriority / rememberPreference / forgetPreference;高危(需人工确认)deleteTasks / batchUpdateTasks / archiveTasks / createTasks / setTaskDependencies
   - 守卫:最大步数(默认 10)、同参失败 3 次熔断、60s 超时、单用户单运行会话、每小时 20 次限速;工具失败以错误信息回填模型自纠
   - 可观测:每步模型调用 / 工具入参 / 结果 / 时长落 `[agent]` 结构化日志与会话 trace(`GET /api/agent/sessions/:id`);前端只展示最终回答与工具摘要,不暴露推理过程
   - Agent 的写操作与用户手动保存共用用户级锁串行化;完成后前端自动刷新看板
@@ -58,24 +60,31 @@ npm run preview
 ```
 server/
 ├── .env                   # 数据库/Redis 凭据 + GLM Agent 配置(不入库)
-├── test/                  # Agent 测试:mock GLM + Loop 机制测试 + 集成测试
+├── package.json           # 后端独立依赖(NestJS 11;与根前端依赖分离)
+├── tsconfig.json          # strict + experimentalDecorators
+├── test/                  # Agent 测试:mock GLM + Loop 机制测试 + 集成测试(引 server/dist,需先构建)
 └── src/
-    ├── index.js           # Express 装配与路由
-    ├── db.js              # MySQL 连接池 + 自动建库建表与列迁移
-    ├── cache.js           # Redis 会话与看板缓存(故障降级)
-    ├── auth.js            # 注册/登录/登出/scrypt 哈希/会话校验
-    ├── board.js           # 看板读写(事务全量替换 + cache-aside + 用户级写锁)
-    ├── util/rateLimit.js  # 内存限速器(登录/注册/Agent 共用)
-    ├── services/          # 业务服务层:projectService(项目 CRUD+进度聚合)/ taskService(细粒度任务操作)
-    └── agent/             # Agent Harness
-        ├── config.js      #   AgentConfig(env:模型/步数/超时)
-        ├── glm-client.js  #   GlmClient(OpenAI 兼容 /chat/completions,纯 fetch)
-        ├── harness.js     #   AgentLoop(多轮 tool calling + 守卫)
-        ├── session.js     #   AgentSession(内存存储 + 状态机)
-        ├── trace.js       #   AgentTrace(结构化步骤日志)
-        ├── registry.js    #   AgentToolRegistry
-        ├── executor.js    #   AgentToolExecutor(JSON/参数校验 + 风险检查)
-        └── tools/         #   8 个工具(4 只读 + 4 安全写),全部调业务 Service
+    ├── main.ts            # Nest 启动编排(initDb → 注册工具 → 装配 → 监听)
+    ├── app.module.ts      # 控制器模块图
+    ├── routes/            # Controller(HTTP 适配层):auth/board/projects/memories/tasks/agent/model-config/health
+    ├── http/              # AuthGuard + 限速 Guard + 全局异常过滤器(统一 {error} JSON)+ @UserId 装饰器
+    ├── types.ts           # 领域类型(Task/BoardState/Project)
+    ├── db.ts              # MySQL 连接池 + 自动建库建表与列迁移
+    ├── cache.ts           # Redis 会话与看板缓存(故障降级)
+    ├── board.ts           # 看板读写(事务全量替换 + cache-aside + 用户级写锁)
+    ├── util/rateLimit.ts  # 内存限速器(登录/注册/Agent Guard 共用;多实例部署需换 Redis 计数)
+    ├── services/          # 业务服务层:authService / projectService / taskService / memoryService / modelConfigService(纯函数模块,测试直接引用)
+    └── agent/             # Agent Harness(框架无关)
+        ├── config.ts      #   AgentConfig(env:模型/步数/超时)
+        ├── glm-client.ts  #   OpenAI 兼容 /chat/completions(纯 fetch)
+        ├── harness.ts     #   AgentLoop(多轮 tool calling + 守卫 + 人工确认)
+        ├── session.ts     #   AgentSession(内存存储 + 状态机 + 单用户单运行)
+        ├── trace.ts       #   AgentTrace(结构化步骤日志)
+        ├── stepLabel.ts   #   步骤可视化中文摘要(SSE label)
+        ├── registry.ts    #   Tool 注册表(READ/SAFE_WRITE/HIGH_RISK)
+        ├── executor.ts    #   参数解析/校验 + 风险检查
+        ├── approvals.ts   #   HIGH_RISK 人工确认挂起/落点
+        └── tools/         #   16 个工具(5 只读 + 6 安全写 + 5 高危),全部调业务 Service
 src/
 ├── theme/index.ts         # antd 明暗两套 token(Linear 靛蓝 #5e6ad2)
 ├── context/               # AuthContext / ThemeContext(Provider + contexts.ts)
@@ -92,8 +101,9 @@ src/
 ## Agent 测试
 
 ```bash
-node server/test/agent-loop.test.mjs          # Loop 纯机制测试(无需 MySQL/Redis):18 项
-node server/test/agent-integration.test.mjs   # 全链路集成(本机 MySQL + mock GLM):31 项,用独立库 vibeboard_it 并自动清理
+npm run build:server                          # 先构建(测试引用 server/dist 编译产物)
+MYSQL_DATABASE=<临时库> MYSQL_PASSWORD=... node server/test/agent-loop.test.mjs          # Loop 纯机制测试:45 项(需可达 MySQL 且库存在)
+node server/test/agent-integration.test.mjs   # 全链路集成(本机 MySQL + mock GLM):84 项,用独立库 vibeboard_it 并自动清理
 ```
 
 mock GLM(`server/test/mock-glm.mjs`)实现 OpenAI 兼容 `/chat/completions`;`server/test/run-mock-glm.mjs` 起独立 mock 服务(默认 3900 端口);隧道可用时 `bash server/test/e2e-check.sh` 一键跑 HTTP E2E(模型配置增删 + mock 全链路)。配好真实模型后 `node --env-file=server/.env server/test/acceptance-five-cases.mjs` 跑五场景验收(只读问答/改优先级/整理任务/删除拒绝/优雅失败),自动补种子并还原看板。

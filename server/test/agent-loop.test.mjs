@@ -17,9 +17,9 @@ await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve))
 const { port } = server.address()
 process.env.GLM_BASE_URL = `http://127.0.0.1:${port}`
 
-const { registerTool } = await import('../src/agent/registry.js')
-const { runAgent } = await import('../src/agent/harness.js')
-const { resolveApproval } = await import('../src/agent/approvals.js')
+const { registerTool } = await import('../dist/agent/registry.js')
+const { runAgent } = await import('../dist/agent/harness.js')
+const { resolveApproval } = await import('../dist/agent/approvals.js')
 
 /* ---------- 内存数据源 + 两个测试工具 ---------- */
 const store = [{ id: 't1', title: '写周报', status: 'todo', priority: null }]

@@ -11,13 +11,15 @@
 ```
 React 19 + TS(strict) + Vite + Ant Design 6 + react-router 7 + @dnd-kit
         │ fetch /api/*(Vite 代理 → localhost:3000)
-Node + Express(server/,纯 JS ESM 零构建)
+NestJS 11 + TypeScript(strict)(server/,独立 package.json,tsc 构建到 server/dist)
         ├── MySQL(SSH 隧道 127.0.0.1:13306):users + tasks 表,库 vibeboard
         └── Redis(SSH 隧道 127.0.0.1:16379):session:{token}(7d 滑动)+ board:{userId} 缓存(1h)
 ```
 
+- 后端分层:`src/routes/`(Controller + Guard,仅 HTTP 适配)→ `src/services/` + `board.ts`(业务,纯函数模块级单例)→ `db.ts`/`cache.ts`(连接单例);Agent harness 与工具在 `src/agent/`,框架无关。鉴权 = `AuthGuard`,限速 = Guard(`http/guards.ts`),错误 = `GlobalExceptionFilter` 统一 `{error}` JSON(带 status 的错误透传 message,否则「服务器内部错误」,与旧 Express 版逐字一致)
+- 服务层刻意保持「模块单例 + 命名导出函数」而非 class DI:两个测试套件直接 import 这些模块,这是测试接缝,勿改成注入式
 - 前端读:Redis cache-aside(未命中读 MySQL 回填);前端写:500ms 防抖全量 PUT → MySQL 事务(DELETE+批量 INSERT)→ 写穿透更新缓存;Redis 故障降级直连 MySQL,会话校验不降级
-- 凭据在 `server/.env`(已 gitignore),不在任何文档中记录明文密码
+- 凭据在 `server/.env`(已 gitignore),不在任何文档中记录明文密码;env 经 `node --env-file=.env` 原生加载(无 dotenv)
 
 ## 关键决策(不要回退)
 
@@ -31,11 +33,13 @@ Node + Express(server/,纯 JS ESM 零构建)
 8. **删除项目** = tasks.project_id 置 NULL(任务保留);board.js 写入侧会过滤指向不存在项目的 projectId(防陈旧保存复活悬空引用),且 Redis 缓存只写过滤后的 sanitized 状态——三处缺一不可,勿回退
 9. **通用时间线组件** `src/components/TimelineView.tsx`:数据驱动(items: key/color/title/description/timeLabel/tag),调用方负责排序与内容组装。现有两个消费方:项目管理页第三种视图「时间线」(节点色 = PROJECT_STATUS_DOT)、看板「任务动态」抽屉(TaskTimelineDrawer,节点色 = 所在列)。新增时间线场景时复用此组件,不要另写
 10. **Agent Harness 自研,不用 LangChain/LangGraph/Multi-Agent**(`server/src/agent/`,2026-09-09 用户明确要求):Model + System Instructions + Tools + Loop + Guardrails 的最小实现;GLM 走 OpenAI 兼容 `/chat/completions`(纯 fetch,不引 SDK)
-11. **Agent 工具只调业务 Service,不碰 SQL/Express**:调用链 Tool → services/taskService・projectService → board.js/pool;工具分 READ(自动执行)与 SAFE_WRITE(自动执行+记录)两级,第一版刻意不提供 deleteTask——验收场景要求 Agent 对删除请求如实说明做不到,不要"补全"删除工具(加则必须带 Human Approval)
+11. **Agent 工具只调业务 Service,不碰 SQL/HTTP 层**:调用链 Tool → services/taskService・projectService → board.ts/pool;工具分 READ(自动执行)与 SAFE_WRITE(自动执行+记录)两级,第一版刻意不提供 deleteTask——验收场景要求 Agent 对删除请求如实说明做不到,不要"补全"删除工具(加则必须带 Human Approval)
 12. **Agent 边界安全**:userId 永远来自 requireAuth 注入的 ctx,绝不由模型传参;工具返回 {error} 回填模型自纠;同参失败 3 次熔断、maxSteps(10)上限、单用户单运行会话、agent 路由每小时 20 次限速;前端只显示 finalAnswer + 工具摘要,不暴露推理过程
-13. **看板用户级写锁** `board.js withBoardLock(userId, fn)`:Agent 读-改-写与前端全量 PUT /api/board 共用此锁串行化,防止互相覆盖(最后写入胜出的全量保存模型下,这是唯一防线,勿绕过)
+13. **看板用户级写锁** `board.ts withBoardLock(userId, fn)`:Agent 读-改-写与前端全量 PUT /api/board 共用此锁串行化,防止互相覆盖(最后写入胜出的全量保存模型下,这是唯一防线,勿绕过)
 14. **tasks 表的 priority(P0-P3)/ due_date(毫秒)是为 Agent 验收场景加的最小数据模型扩展**,迁移走 information_schema 检查模式(同 project_id 先例);taskService 的细粒度操作都构建在 getBoard/saveBoard 读-改-写之上,没有按任务行的 SQL
-15. **模型自助配置走预置供应商目录**(`services/modelConfigService.js` CATALOG:zhipu/deepseek),用户只填 API Key + 选模型,baseUrl 由目录内置(勿开放用户自定义 URL——防 SSRF);密钥按 (user_id, provider) 存 `user_model_configs` 表,接口只回传掩码;解析顺序 = 用户激活行 > server/.env 的 GLM_*(回退) > 503;新增供应商 = 目录加一行 + 可选 MODEL_BASE_URL_<ID> 覆盖
+15. **模型自助配置走预置供应商目录**(`services/modelConfigService.ts` CATALOG:zhipu/deepseek),用户只填 API Key + 选模型,baseUrl 由目录内置(勿开放用户自定义 URL——防 SSRF);密钥按 (user_id, provider) 存 `user_model_configs` 表,接口只回传掩码;解析顺序 = 用户激活行 > server/.env 的 GLM_*(回退) > 503;新增供应商 = 目录加一行 + 可选 MODEL_BASE_URL_<ID> 覆盖
+16. **后端用 NestJS(2026-09-10 用户选定,替换裸 Express)**:框架只负责 HTTP 适配(Controller/Guard/Filter/启动编排),业务层保持纯函数单例;Agent harness/Glm 客户端保持框架无关(纯 fetch);SSE 接口 `agent/run/stream` 用 `@Res()` 裸写 res 保持线格式,不要改造成 @Sse() 装饰器
+17. **限速器仍是进程内存态**(`util/rateLimit.ts` + `http/guards.ts` 四个 Guard):单进程语义与旧版一致;多实例部署前必须换 Redis 计数,且 agent「单用户单运行会话」(agent/session.ts 内存 Map)同理——这是未来并发扩展的前置改造点
 
 ## 历史与环境风险
 
@@ -45,8 +49,8 @@ Node + Express(server/,纯 JS ESM 零构建)
 
 ## 工程约定
 
-- `npm run build` 必须零类型错误;oxlint 必须零警告(有 set-state-in-effect、refs-during-render、only-export-components 拦截,Context 的 Provider 与 hook 分文件:contexts.ts 存对象,*.tsx 存 Provider,hooks/ 存 hook)
-- tsconfig 开启 verbatimModuleSyntax + erasableSyntaxOnly(类型导入必须 `import type`)
+- `npm run build`(前端)与 `npm run build:server`(server/ tsc)都必须零类型错误;oxlint 必须零警告(有 set-state-in-effect、refs-during-render、only-export-components 拦截,Context 的 Provider 与 hook 分文件:contexts.ts 存对象,*.tsx 存 Provider,hooks/ 存 hook)
+- 前端 tsconfig 开启 verbatimModuleSyntax + erasableSyntaxOnly(类型导入必须 `import type`);server/ tsconfig 是独立配置(strict + experimentalDecorators,不启用 verbatimModuleSyntax)
 - Windows + Git Bash 环境;路径大小写不敏感,**不要创建仅大小写不同的同名文件**(曾因 ThemeContext.tsx / themeContext.ts 并存导致模块解析冲突,现合并为 contexts.ts)
 
 ## 测试注意(浏览器自动化)
@@ -56,12 +60,14 @@ Node + Express(server/,纯 JS ESM 零构建)
 - 浏览器标签页输入通道偶发卡死(点击/截图超时):换新标签页即恢复;fill 通常仍可用,点击/按键退化为 dom_cua 通道
 - 测试产生的脏数据要清理(DELETE users/tasks 后再交付)
 
-## 当前状态(2026-09-09)
+## 当前状态(2026-09-10)
 
+- **后端已迁移到 NestJS 11 + TS strict**(替换裸 Express,用户选定):server/ 成为独立 npm 工程(自己的 package.json/tsconfig,依赖不再挂在根),构建产物 server/dist;根脚本 `npm run server` = server/ 内 build + `node --env-file=.env --watch dist/main.js`。API 路径、请求/响应 JSON、错误文案与限速阈值与 Express 版逐字一致,前端零改动
 - 已含「项目管理」功能:projects 表(7 态状态/进度聚合/仓库/起止/技术栈)+ tasks.project_id 关联 + 卡片/表格双视图页
-- 已含 AI 助手(Agent Harness):8 工具 + Loop + 守卫 + trace + 前端 AgentChatDrawer + **模型自助设置弹窗**(切换/添加模型只需填 Key);.env 的 GLM_* 降级为兜底,不再必须填写
-- 已实测:Agent Loop 机制 18 项(`node server/test/agent-loop.test.mjs`,无 DB);全链路集成 31 项(`node server/test/agent-integration.test.mjs`,本机 MySQL 3306 + mock GLM,独立库 vibeboard_it 自动清理,含模型配置服务用例);build + lint 全绿
-- **待办**:2026-09-09 隧道当天断了三次(不稳定)。恢复后:① 起后端 + mock(`node server/test/run-mock-glm.mjs 3900`)并以 MODEL_BASE_URL_DEEPSEEK=http://127.0.0.1:3900 启动 → `bash server/test/e2e-check.sh` 一键 HTTP E2E;② 浏览器验收模型设置弹窗全链路;③ 用户填真实 Key 后五场景真实对话回归
+- 已含 AI 助手(Agent Harness):16 工具(READ 5 + SAFE_WRITE 5 + HIGH_RISK 6)+ Loop + 守卫 + trace + SSE 执行可视化 + 前端 AgentChatDrawer + 模型自助设置弹窗;.env 的 GLM_* 降级为兜底
+- 已实测(2026-09-10,Nest 迁移后):`npm run build:server` 零错误;Agent Loop 45 项断言全过;全链路集成 84 项断言全过(本机 MySQL 3306 + mock GLM,独立库 vibeboard_it 自动清理);oxlint 零警告;前端 build 正常;Nest 服务冒烟(本机 MySQL 覆盖启动)health/404/401/登录话术/校验文案全部与旧版一致
+- **测试运行方式**:两套测试 import 的是 `server/dist`(编译产物),跑之前先 `npm run build:server`;loop 测试需要可达 MySQL 且库存在(应急:`MYSQL_DATABASE=<临时库> MYSQL_PASSWORD=123456` 先用 `dist/db.js` 的 initDb 建表,跑完 DROP),否则 resolveModelConfig 连不上会直接抛错
+- **待办**:隧道已恢复,`bash server/test/e2e-check.sh` 已在 Nest 版跑通(2026-09-10,含 SSE stream 实测);剩:① 用户填真实 Key 后五场景真实对话回归;② 并发改造前置项:限速器与 agent 单运行会话从内存态迁 Redis(见决策 17)
 - 2026-09-09 观察:SSH 隧道(13306/16379)会静默断开,后端起不来时先查 `netstat | grep 13306`;应急可用本机 MySQL(3306 root/123456)经环境变量覆盖启动(不改 .env),但 Redis 无本机替身,登录会话不可用(fail-closed 是有意的)
 - 数据统计、任务归档为占位页
-- 后台进程不常驻:启动用 `npm run server` + `npm run dev`;**杀后端必须连 --watch 子进程一起杀**(TaskStop 只杀 shell 会留孤儿占着 3000:PowerShell 按 CommandLine 匹配 server/src/index.js 清理)
+- 后台进程不常驻:启动用 `npm run server` + `npm run dev`;**杀后端必须连 --watch 子进程一起杀**(TaskStop 只杀 shell 会留孤儿占着 3000:PowerShell 按 CommandLine 匹配 server/dist/main.js 清理)
