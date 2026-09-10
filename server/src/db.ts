@@ -6,6 +6,7 @@ const {
   MYSQL_USER = 'root',
   MYSQL_PASSWORD = '',
   MYSQL_DATABASE = 'vibeboard',
+  MYSQL_POOL_SIZE = '10',
 } = process.env
 
 export const pool: Pool = mysql.createPool({
@@ -15,7 +16,8 @@ export const pool: Pool = mysql.createPool({
   password: MYSQL_PASSWORD,
   database: MYSQL_DATABASE,
   waitForConnections: true,
-  connectionLimit: 10,
+  // 每进程连接数:多 worker 部署时注意 MySQL 侧总连接上限(N worker × MYSQL_POOL_SIZE)
+  connectionLimit: Math.max(1, Number(MYSQL_POOL_SIZE) || 10),
   namedPlaceholders: false,
 })
 

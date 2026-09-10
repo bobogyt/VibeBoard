@@ -457,7 +457,7 @@ const t3 = await taskService.createTask(userId, { title: '已完成任务', stat
     'Case7 收到审批请求且带任务预览',
     !!approval && approval.tasks.length === 1 && approval.tasks[0].title === '将被 Agent 删除的任务',
   )
-  check('Case7 审批提交被接受', resolveApproval(approval.sessionId, approval.requestId, true) === true)
+  check('Case7 审批提交被接受', (await resolveApproval(approval.sessionId, approval.requestId, true)) === true)
   const result = await runPromise
   check('Case7 状态 COMPLETED', result.status === 'COMPLETED')
   let gone = false
@@ -524,7 +524,7 @@ const t3 = await taskService.createTask(userId, { title: '已完成任务', stat
     if (!approval) await new Promise((resolve) => setTimeout(resolve, 10))
   }
   check('Case9 审批预览为编号计划', approval?.tasks.length === 3 && approval.tasks[0].title.startsWith('1.'))
-  check('Case9 审批提交被接受', resolveApproval(approval.sessionId, approval.requestId, true) === true)
+  check('Case9 审批提交被接受', (await resolveApproval(approval.sessionId, approval.requestId, true)) === true)
   const result = await runPromise
   check('Case9 状态 COMPLETED', result.status === 'COMPLETED')
   const planTitles = (await taskService.getTasks(userId, { status: 'todo' }))
@@ -622,7 +622,7 @@ const t3 = await taskService.createTask(userId, { title: '已完成任务', stat
     approval?.tasks.length === 2 && approval.tasks.some((t) => t.title.includes('阻塞源任务')) ||
       (console.error('Case12 DEBUG approval =', JSON.stringify(approval), '| result =', JSON.stringify(await runPromise.catch((e) => e.message))), false),
   )
-  check('Case12 审批提交被接受', resolveApproval(approval.sessionId, approval.requestId, true) === true)
+  check('Case12 审批提交被接受', (await resolveApproval(approval.sessionId, approval.requestId, true)) === true)
   await runPromise
   check('Case12 依赖已落库', eq((await taskService.getTask(userId, dependent.id)).dependsOn, [blocker.id]))
   check(

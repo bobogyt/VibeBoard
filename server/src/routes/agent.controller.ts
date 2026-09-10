@@ -69,7 +69,7 @@ export class AgentController {
     if (typeof requestId !== 'string' || typeof approved !== 'boolean') {
       throw httpError(400, 'requestId 与 approved 必填')
     }
-    const ok = resolveApproval(id, requestId, approved)
+    const ok = await resolveApproval(id, requestId, approved)
     if (!ok) throw httpError(409, '该请求不在等待确认')
     return { ok: true }
   }

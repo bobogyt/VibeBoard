@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { agentConfig } from './config'
 import { chatCompletion, type ChatMessage } from './glm-client'
-import { AgentStatus, createSession, getSession, hasRunningSession, touch, type AgentSession } from './session'
+import { AgentStatus, createSession, getSession, acquireRunSlot, releaseRunSlot, touch, type AgentSession } from './session'
 import { getTool, listSchemas, type Tool } from './registry'
 import { executeTool, parseAndValidate } from './executor'
 import { requestApproval } from './approvals'
@@ -142,14 +142,29 @@ export async function runAgent(
     console.error('[agent] runAgent called with undefined userId, stack:')
     console.error(new Error('trace').stack)
   }
+  if (typeof userMessage !== 'string' || userMessage.trim().length === 0 || userMessage.length > 2000) {
+    throw httpError(400, '消息需为 1-2000 字')
+  }
+  // 单用户单运行会话:Redis NX 跨进程互斥(降级时为进程内);占位到运行结束,finally 必释放
+  if (!(await acquireRunSlot(userId))) throw httpError(409, '上一个请求还在执行中,请稍候')
+
+  try {
+    return await runSession(userId, userMessage, { onEvent })
+  } finally {
+    await releaseRunSlot(userId)
+  }
+}
+
+/** 单次会话主体(调用方已持有运行席位) */
+async function runSession(
+  userId: string,
+  userMessage: string,
+  { onEvent }: { onEvent?: (event: import('./session').AgentEvent) => void },
+): Promise<AgentRunResult> {
   const modelConfig: ResolvedModelConfig | null = await resolveModelConfig(userId)
   if (!modelConfig) {
     throw httpError(503, 'AI 助手尚未配置模型,请点击对话窗口右上角的设置按钮,选择模型并填写 API Key')
   }
-  if (typeof userMessage !== 'string' || userMessage.trim().length === 0 || userMessage.length > 2000) {
-    throw httpError(400, '消息需为 1-2000 字')
-  }
-  if (hasRunningSession(userId)) throw httpError(409, '上一个请求还在执行中,请稍候')
 
   const session = createSession(userId, userMessage.trim())
   session.model = `${modelConfig.provider}/${modelConfig.model}`

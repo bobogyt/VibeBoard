@@ -297,7 +297,7 @@ function scripted(steps) {
       approval.label.includes('待确认'),
   )
   check('用例9 等待期间未执行工具', destroyed.length === 0)
-  check('用例9 审批提交被接受', resolveApproval(approval.sessionId, approval.requestId, true) === true)
+  check('用例9 审批提交被接受', (await resolveApproval(approval.sessionId, approval.requestId, true)) === true)
   const result = await runPromise
   check('用例9 确认后真实执行', destroyed.length === 1 && result.status === 'COMPLETED')
   const toolEvents = events.filter((e) => e.type === 'tool')

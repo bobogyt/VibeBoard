@@ -1,6 +1,7 @@
 import { Injectable, type CanActivate, type ExecutionContext } from '@nestjs/common'
 import { requireAuthToken } from '../services/authService'
 import { createRateLimiter } from '../util/rateLimit'
+import { redis } from '../cache'
 import { httpError } from './http-error'
 import { getRequest } from './authed-request'
 
@@ -18,50 +19,50 @@ export class AuthGuard implements CanActivate {
 
 const TOO_MANY = '尝试过于频繁,请稍后再试'
 
-/* ---------- 认证接口限速(防暴力破解) ---------- */
+/* ---------- 认证接口限速(防暴力破解;Redis 共享计数,多进程一致) ---------- */
 // 登录:同 IP+用户名 10 分钟 8 次,同 IP 10 分钟 40 次(防换用户名绕过);注册:同 IP 每小时 10 次
 const LOGIN_WINDOW_MS = 10 * 60_000
-const loginKeyLimiter = createRateLimiter({ windowMs: LOGIN_WINDOW_MS, max: 8 })
-const loginIpLimiter = createRateLimiter({ windowMs: LOGIN_WINDOW_MS, max: 40 })
-const registerLimiter = createRateLimiter({ windowMs: 60 * 60_000, max: 10 })
+const loginKeyLimiter = createRateLimiter({ windowMs: LOGIN_WINDOW_MS, max: 8, prefix: 'login-key', redis })
+const loginIpLimiter = createRateLimiter({ windowMs: LOGIN_WINDOW_MS, max: 40, prefix: 'login-ip', redis })
+const registerLimiter = createRateLimiter({ windowMs: 60 * 60_000, max: 10, prefix: 'register', redis })
 
 @Injectable()
 export class RegisterRateLimitGuard implements CanActivate {
-  canActivate(ctx: ExecutionContext): boolean {
+  async canActivate(ctx: ExecutionContext): Promise<boolean> {
     const req = getRequest(ctx)
-    if (!registerLimiter.tryTake(String(req.ip))) throw httpError(429, TOO_MANY)
+    if (!(await registerLimiter.tryTake(String(req.ip)))) throw httpError(429, TOO_MANY)
     return true
   }
 }
 
 @Injectable()
 export class LoginIpRateLimitGuard implements CanActivate {
-  canActivate(ctx: ExecutionContext): boolean {
+  async canActivate(ctx: ExecutionContext): Promise<boolean> {
     const req = getRequest(ctx)
-    if (!loginIpLimiter.tryTake(String(req.ip))) throw httpError(429, TOO_MANY)
+    if (!(await loginIpLimiter.tryTake(String(req.ip)))) throw httpError(429, TOO_MANY)
     return true
   }
 }
 
 @Injectable()
 export class LoginKeyRateLimitGuard implements CanActivate {
-  canActivate(ctx: ExecutionContext): boolean {
+  async canActivate(ctx: ExecutionContext): Promise<boolean> {
     const req = getRequest(ctx)
     const key = `${String(req.ip)}|${String((req.body as Record<string, unknown> | undefined)?.username ?? '').toLowerCase()}`
-    if (!loginKeyLimiter.tryTake(key)) throw httpError(429, TOO_MANY)
+    if (!(await loginKeyLimiter.tryTake(key))) throw httpError(429, TOO_MANY)
     return true
   }
 }
 
 /* ---------- Agent 限速:按用户每小时 20 次(GLM 调用有成本) ---------- */
 // 必须挂在 AuthGuard 之后(依赖 req.userId);run 内部还有单用户单运行会话守卫
-const agentLimiter = createRateLimiter({ windowMs: 60 * 60_000, max: 20 })
+const agentLimiter = createRateLimiter({ windowMs: 60 * 60_000, max: 20, prefix: 'agent', redis })
 
 @Injectable()
 export class AgentRateLimitGuard implements CanActivate {
-  canActivate(ctx: ExecutionContext): boolean {
+  async canActivate(ctx: ExecutionContext): Promise<boolean> {
     const req = getRequest(ctx)
-    if (!agentLimiter.tryTake(String(req.userId))) throw httpError(429, TOO_MANY)
+    if (!(await agentLimiter.tryTake(String(req.userId)))) throw httpError(429, TOO_MANY)
     return true
   }
 }

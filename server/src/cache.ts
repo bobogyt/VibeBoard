@@ -77,3 +77,19 @@ export async function setBoardCache(userId: string, state: BoardState): Promise<
 export function redisStatus(): string {
   return redis.status
 }
+
+/* ---------- 审批跨进程投递(pub/sub 专用订阅连接) ---------- */
+// ioredis 进入订阅模式后不能再执行普通命令,必须用独立连接
+let approvalSubscriber: Redis | null = null
+
+/** 返回审批频道的订阅连接(Redis 未就绪时返回 null,调用方退回纯进程内) */
+export function getApprovalSubscriber(): Redis | null {
+  if (redis.status !== 'ready') return null
+  if (!approvalSubscriber) {
+    approvalSubscriber = redis.duplicate()
+    approvalSubscriber.on('error', (err: { code?: string; message?: string }) => {
+      console.warn('[redis] approval subscriber error:', err.code || err.message)
+    })
+  }
+  return approvalSubscriber
+}

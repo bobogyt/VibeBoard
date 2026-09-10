@@ -1,4 +1,6 @@
 import { randomUUID } from 'node:crypto'
+import { redis } from '../cache'
+import { agentConfig } from './config'
 
 export const AgentStatus = {
   RUNNING: 'RUNNING',
@@ -72,12 +74,54 @@ export function getSession(sessionId: string): AgentSession | null {
   return sessions.get(sessionId) ?? null
 }
 
-export function hasRunningSession(userId: string): boolean {
-  for (const s of sessions.values()) {
-    if (s.userId !== userId) continue
-    if (s.status === AgentStatus.RUNNING || s.status === AgentStatus.WAITING_APPROVAL) return true
+/* ---------- 单用户单运行会话锁(多进程安全) ---------- */
+// Redis NX 原子占位:RUNNING 与 WAITING_APPROVAL 阶段都持锁;TTL 兜底进程崩溃后的悬挂锁
+import type { Redis } from 'ioredis'
+
+const runningKeyOf = (userId: string) => `agent:running:${userId}`
+const RUN_TTL_MS =
+  agentConfig.maxSteps * agentConfig.timeoutMs + agentConfig.approvalTimeoutMs + 60_000
+
+/** 运行席位存储:Redis 就绪走跨进程互斥(NX),否则退回进程内 Set;client 可注入便于测试 */
+export class RunSlotStore {
+  private readonly memory = new Set<string>()
+
+  constructor(
+    private readonly client: Redis,
+    private readonly ttlMs: number,
+  ) {}
+
+  /** 获取运行席位;已被占用(Running 中/等待审批中)返回 false */
+  async acquire(userId: string): Promise<boolean> {
+    if (this.client.status === 'ready') {
+      try {
+        const ok = await this.client.set(runningKeyOf(userId), '1', 'PX', this.ttlMs, 'NX')
+        return ok === 'OK'
+      } catch {
+        // 落入进程内降级
+      }
+    }
+    if (this.memory.has(userId)) return false
+    this.memory.add(userId)
+    return true
   }
-  return false
+
+  /** 释放运行席位(run 结束的 finally 必调) */
+  async release(userId: string): Promise<void> {
+    this.memory.delete(userId)
+    if (this.client.status !== 'ready') return
+    await this.client.del(runningKeyOf(userId)).catch(() => {})
+  }
+}
+
+export const runSlotStore = new RunSlotStore(redis, RUN_TTL_MS)
+
+export function acquireRunSlot(userId: string): Promise<boolean> {
+  return runSlotStore.acquire(userId)
+}
+
+export function releaseRunSlot(userId: string): Promise<void> {
+  return runSlotStore.release(userId)
 }
 
 export function touch(session: AgentSession): void {

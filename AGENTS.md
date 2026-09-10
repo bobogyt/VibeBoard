@@ -39,7 +39,7 @@ NestJS 11 + TypeScript(strict)(server/,独立 package.json,tsc 构建到 server/
 14. **tasks 表的 priority(P0-P3)/ due_date(毫秒)是为 Agent 验收场景加的最小数据模型扩展**,迁移走 information_schema 检查模式(同 project_id 先例);taskService 的细粒度操作都构建在 getBoard/saveBoard 读-改-写之上,没有按任务行的 SQL
 15. **模型自助配置走预置供应商目录**(`services/modelConfigService.ts` CATALOG:zhipu/deepseek),用户只填 API Key + 选模型,baseUrl 由目录内置(勿开放用户自定义 URL——防 SSRF);密钥按 (user_id, provider) 存 `user_model_configs` 表,接口只回传掩码;解析顺序 = 用户激活行 > server/.env 的 GLM_*(回退) > 503;新增供应商 = 目录加一行 + 可选 MODEL_BASE_URL_<ID> 覆盖
 16. **后端用 NestJS(2026-09-10 用户选定,替换裸 Express)**:框架只负责 HTTP 适配(Controller/Guard/Filter/启动编排),业务层保持纯函数单例;Agent harness/Glm 客户端保持框架无关(纯 fetch);SSE 接口 `agent/run/stream` 用 `@Res()` 裸写 res 保持线格式,不要改造成 @Sse() 装饰器
-17. **限速器仍是进程内存态**(`util/rateLimit.ts` + `http/guards.ts` 四个 Guard):单进程语义与旧版一致;多实例部署前必须换 Redis 计数,且 agent「单用户单运行会话」(agent/session.ts 内存 Map)同理——这是未来并发扩展的前置改造点
+17. **并发设施已 Redis 外置(2026-09-10 用户要求优化并发)**:限速计数(`util/rateLimit.ts` RedisRateLimiter,INCR 固定窗口)、Agent 单运行锁(`agent/session.ts` RunSlotStore,SET NX+PX,TTL 兜底崩溃悬挂)、高危审批跨 worker 投递(`agent/approvals.ts` ApprovalRouter,pending 标记+pub/sub 频道 agent:approval)全部以 Redis 为权威,三者均带进程内存降级(Redis 不可用→单进程语义不变)。多进程:`WEB_WORKERS=N` 启用 Node cluster(主进程自动重生崩溃 worker);连接池 `MYSQL_POOL_SIZE`(默认 10/进程,N×池 ≤ MySQL 上限)。已知限制:① agent 会话 trace(`session.ts` 内存 Map 50 条)是进程本地的,多 worker 下 GET /api/agent/sessions/:id 仅持有 worker 可读(前端不依赖);② 跨 worker 审批与超时竞态时可能返回 ok 而实际已超时(与单进程版先到先得竞态同源)。测试:`node server/test/concurrency.test.mjs`(mini-RESP 假服务器走真实 ioredis + FakeRedisClient 注入 ApprovalRouter,26 项);本机联调可用 `node server/test/run-fake-redis.mjs 16390` 充当共享 Redis
 
 ## 历史与环境风险
 
@@ -66,8 +66,9 @@ NestJS 11 + TypeScript(strict)(server/,独立 package.json,tsc 构建到 server/
 - 已含「项目管理」功能:projects 表(7 态状态/进度聚合/仓库/起止/技术栈)+ tasks.project_id 关联 + 卡片/表格双视图页
 - 已含 AI 助手(Agent Harness):16 工具(READ 5 + SAFE_WRITE 5 + HIGH_RISK 6)+ Loop + 守卫 + trace + SSE 执行可视化 + 前端 AgentChatDrawer + 模型自助设置弹窗;.env 的 GLM_* 降级为兜底
 - 已实测(2026-09-10,Nest 迁移后):`npm run build:server` 零错误;Agent Loop 45 项断言全过;全链路集成 84 项断言全过(本机 MySQL 3306 + mock GLM,独立库 vibeboard_it 自动清理);oxlint 零警告;前端 build 正常;Nest 服务冒烟(本机 MySQL 覆盖启动)health/404/401/登录话术/校验文案全部与旧版一致
+- **并发优化已完成(2026-09-10)**:限速/单运行锁/审批投递 Redis 外置(见决策 17)+ cluster 多进程。concurrency.test.mjs 26 项全过;WEB_WORKERS=2 冒烟:双 worker 健康检查轮询、注册限速跨 worker 聚合(11 次第 11 次 429)、登录会话跨 worker 共享(board/me/projects 均过)。当日隧道又断,冒烟用本机 MySQL + run-fake-redis 假 Redis 完成
 - **测试运行方式**:两套测试 import 的是 `server/dist`(编译产物),跑之前先 `npm run build:server`;loop 测试需要可达 MySQL 且库存在(应急:`MYSQL_DATABASE=<临时库> MYSQL_PASSWORD=123456` 先用 `dist/db.js` 的 initDb 建表,跑完 DROP),否则 resolveModelConfig 连不上会直接抛错
-- **待办**:隧道已恢复,`bash server/test/e2e-check.sh` 已在 Nest 版跑通(2026-09-10,含 SSE stream 实测);剩:① 用户填真实 Key 后五场景真实对话回归;② 并发改造前置项:限速器与 agent 单运行会话从内存态迁 Redis(见决策 17)
+- **待办**:① 用户填真实 Key 后五场景真实对话回归;② 隧道恢复后用真 Redis 复跑一次多 worker 冒烟(当日冒烟用的 run-fake-redis);③ 未来真多机部署:SSE 需粘性会话或网关层处理,agent 会话 trace 若要跨 worker 可读需外置
 - 2026-09-09 观察:SSH 隧道(13306/16379)会静默断开,后端起不来时先查 `netstat | grep 13306`;应急可用本机 MySQL(3306 root/123456)经环境变量覆盖启动(不改 .env),但 Redis 无本机替身,登录会话不可用(fail-closed 是有意的)
 - 数据统计、任务归档为占位页
 - 后台进程不常驻:启动用 `npm run server` + `npm run dev`;**杀后端必须连 --watch 子进程一起杀**(TaskStop 只杀 shell 会留孤儿占着 3000:PowerShell 按 CommandLine 匹配 server/dist/main.js 清理)
