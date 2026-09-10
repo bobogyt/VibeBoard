@@ -151,6 +151,19 @@ export async function saveBoard(userId: string, input: unknown): Promise<{ ok: b
   const sanitized: BoardState = { todo: [], doing: [], done: [] }
   try {
     await conn.beginTransaction()
+    // 完成时间跟踪:整表替换前先读旧状态,本保存内 done 状态发生迁移的任务刷新 completed_at
+    const [prevRows] = await conn.execute(
+      'SELECT id, status, completed_at FROM tasks WHERE board_id = ? AND archived = 0',
+      [userId],
+    )
+    const prevById = new Map<string, { status: string; completedAt: number | null }>()
+    for (const row of prevRows as unknown as Array<{ id: string; status: string; completed_at: number | string | null }>) {
+      prevById.set(row.id, {
+        status: row.status,
+        completedAt: row.completed_at === null || row.completed_at === undefined ? null : Number(row.completed_at),
+      })
+    }
+    const now = Date.now()
     // 只替换未归档任务:归档行不参与整表替换,任何保存都不得清掉归档数据
     await conn.execute('DELETE FROM tasks WHERE board_id = ? AND archived = 0', [userId])
     const values: string[] = []
@@ -159,7 +172,11 @@ export async function saveBoard(userId: string, input: unknown): Promise<{ ok: b
       state[col].forEach((task, index) => {
         const projectId = task.projectId && validProjectIds.has(task.projectId) ? task.projectId : null
         sanitized[col].push({ ...task, projectId })
-        values.push('(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
+        values.push('(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
+        // 完成时间:已在 done 列则沿用旧值(首次完成时刻),新完成记 now,移出 done 清空
+        const prev = prevById.get(task.id)
+        const completedAt =
+          col === 'done' ? (prev && prev.status === 'done' && prev.completedAt !== null ? prev.completedAt : now) : null
         params.push(
           task.id,
           userId,
@@ -173,12 +190,13 @@ export async function saveBoard(userId: string, input: unknown): Promise<{ ok: b
           JSON.stringify(task.dependsOn ?? []),
           task.createdAt,
           task.updatedAt,
+          completedAt,
         )
       })
     }
     if (values.length > 0) {
       await conn.execute(
-        `INSERT INTO tasks (id, board_id, title, description, status, position, project_id, priority, due_date, depends_on, created_at, updated_at) VALUES ${values.join(',')}`,
+        `INSERT INTO tasks (id, board_id, title, description, status, position, project_id, priority, due_date, depends_on, created_at, updated_at, completed_at) VALUES ${values.join(',')}`,
         params,
       )
     }

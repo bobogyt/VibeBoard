@@ -6,7 +6,8 @@ import LoginPage from './pages/LoginPage'
 import BoardPage from './pages/BoardPage'
 import ProjectsPage from './pages/ProjectsPage'
 import ArchivePage from './pages/ArchivePage'
-import PlaceholderPage from './pages/PlaceholderPage'
+import StatsPage from './pages/StatsPage'
+import AutomationsPage from './pages/AutomationsPage'
 
 export default function App() {
   const { status, expireSession } = useAuthContext()
@@ -26,7 +27,8 @@ export default function App() {
         <Route index element={<Navigate to="/board" replace />} />
         <Route path="/board" element={<BoardPage onUnauthorized={expireSession} />} />
         <Route path="/projects" element={<ProjectsPage />} />
-        <Route path="/stats" element={<PlaceholderPage title="数据统计" description="任务完成趋势与效率统计正在开发中" />} />
+        <Route path="/stats" element={<StatsPage />} />
+        <Route path="/automations" element={<AutomationsPage />} />
         <Route path="/archive" element={<ArchivePage />} />
       </Route>
       <Route path="*" element={<Navigate to="/board" replace />} />

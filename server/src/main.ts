@@ -6,6 +6,7 @@ import { AppModule } from './app.module'
 import { initDb } from './db'
 import { GlobalExceptionFilter } from './http/global-exception.filter'
 import { registerAllTools } from './agent/tools'
+import { initAutomationScheduler } from './automation/scheduler'
 
 const PORT = Number(process.env.PORT || 3000)
 // 多进程并发:WEB_WORKERS=N(N>1)时启用 Node cluster;默认 1 = 单进程,行为不变。
@@ -24,6 +25,8 @@ async function bootstrap(): Promise<void> {
 
   // Agent 工具注册表:进程内一次性注册(READ/SAFE_WRITE/HIGH_RISK 共 16 个)
   registerAllTools()
+  // 自动化调度器:所有 worker 参与选主,仅持有 Redis 锁的进程触发定时任务
+  initAutomationScheduler()
 
   const app = await NestFactory.create(AppModule, { bodyParser: false })
   // 关闭 Nest 默认 body parser,沿用原 1mb JSON 限制

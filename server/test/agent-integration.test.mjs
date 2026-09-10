@@ -30,6 +30,9 @@ const taskService = await import('../dist/services/taskService.js')
 const memoryService = await import('../dist/services/memoryService.js')
 const projectService = await import('../dist/services/projectService.js')
 const modelConfigService = await import('../dist/services/modelConfigService.js')
+const statsService = await import('../dist/services/statsService.js')
+const automationScheduler = await import('../dist/automation/scheduler.js')
+const automationStore = await import('../dist/automation/store.js')
 const { randomUUID } = await import('node:crypto')
 
 registerAllTools()
@@ -629,6 +632,129 @@ const t3 = await taskService.createTask(userId, { title: '已完成任务', stat
     'Case12 getTasks 返回 dependsOn',
     eq((await taskService.getTasks(userId)).find((t) => t.id === dependent.id)?.dependsOn, [blocker.id]),
   )
+}
+
+/* ---------- 数据统计服务(completed_at 跟踪 + 五模块聚合) ---------- */
+{
+  // 独立用户,避免与主用户的 Agent 操作记录互相干扰
+  const sUser = randomUUID()
+  await pool.execute('INSERT INTO users (id, username, password_hash, created_at) VALUES (?, ?, ?, ?)', [
+    sUser,
+    `it_stats_${Date.now()}`,
+    'x:y',
+    Date.now(),
+  ])
+  const sp1 = await projectService.createProject(sUser, { name: '统计-项目A', status: 'developing' })
+  await projectService.createProject(sUser, { name: '统计-项目B', status: 'planning' })
+  const past = Date.now() - 3 * 86_400_000
+  const overdueTask = await taskService.createTask(sUser, {
+    title: '统计-逾期',
+    projectId: sp1.id,
+    priority: 'P0',
+    dueDate: past,
+  })
+  await taskService.createTask(sUser, { title: '统计-今日截止', priority: 'P1', dueDate: todayEnd.getTime() })
+  const doneTask = await taskService.createTask(sUser, { title: '统计-已完成', priority: 'P2', status: 'done' })
+  await taskService.createTask(sUser, { title: '统计-普通' })
+
+  const completedAtOf = async (id) => {
+    const [rows] = await pool.query('SELECT completed_at FROM tasks WHERE id = ?', [id])
+    return rows[0].completed_at
+  }
+
+  const stats = await statsService.getStats(sUser)
+  check('统计:优先级分布', eq(stats.priorities, { P0: 1, P1: 1, P2: 1, P3: 0, none: 1 }))
+  check('统计:逾期任务识别与逾期天数', stats.overdue.length === 1 && stats.overdue[0].id === overdueTask.id && stats.overdue[0].daysOverdue >= 3)
+  const pa = stats.projects.items.find((p) => p.name === '统计-项目A')
+  const pb = stats.projects.items.find((p) => p.name === '统计-项目B')
+  check('统计:项目完成率聚合(有任务算进度/无任务为 null)', pa?.progress === 0 && pb?.progress === null && stats.projects.tracked === 1)
+  check('统计:完成时写入 completed_at', typeof (await completedAtOf(doneTask.id)) === 'number')
+
+  // completed_at 迁移语义:编辑不变 / 移出 done 清空 / 再次完成写新值
+  const c1 = Number(await completedAtOf(doneTask.id))
+  await taskService.updateTask(sUser, doneTask.id, { title: '统计-已完成(改名)' })
+  const c2 = Number(await completedAtOf(doneTask.id))
+  check('统计:编辑不改变 completed_at', c2 === c1)
+  await taskService.moveTask(sUser, doneTask.id, 'todo')
+  const c3 = await completedAtOf(doneTask.id)
+  check('统计:移出 done 清空 completed_at', c3 === null)
+  await taskService.moveTask(sUser, doneTask.id, 'done')
+  const c4 = Number(await completedAtOf(doneTask.id))
+  check('统计:再次完成写入新 completed_at', Number.isFinite(c4) && c4 >= c1)
+
+  const stats2 = await statsService.getStats(sUser)
+  check('统计:每日趋势含今日完成', stats2.trends.daily.at(-1)?.count === 1)
+  check('统计:每周趋势含本周完成', stats2.trends.weekly.at(-1)?.count === 1)
+  check('统计:Agent 操作空态(无记录/成功率为 null)', stats2.agent.total === 0 && stats2.agent.successRate === null && stats2.agent.byTool.length === 0)
+
+  // 主用户在前面各 Case 中已真实执行过多个工具:操作统计应有累计且按工具聚合
+  const mainStats = await statsService.getStats(userId)
+  check('统计:主用户 Agent 操作有累计', mainStats.agent.total >= 10 && mainStats.agent.successRate !== null)
+  check('统计:操作按工具聚合', mainStats.agent.byTool.length >= 3 && mainStats.agent.byTool.every((t) => t.count >= 1))
+}
+
+/* ---------- 自动化(开关/只读运行/扫描/通知) ---------- */
+{
+  const insertUser = async () => {
+    const id = randomUUID()
+    await pool.execute('INSERT INTO users (id, username, password_hash, created_at) VALUES (?, ?, ?, ?)', [
+      id,
+      `it_auto_${Date.now()}_${Math.floor(Math.random() * 1000)}`,
+      'x:y',
+      Date.now(),
+    ])
+    return id
+  }
+
+  // 开关存储
+  check('自动化:默认未启用', (await automationStore.isAutomationEnabled(userId, 'daily-plan')) === false)
+  await automationStore.setAutomationEnabled(userId, 'daily-plan', true)
+  check('自动化:开启后可查询', (await automationStore.isAutomationEnabled(userId, 'daily-plan')) === true)
+  check('自动化:listEnabled 含已启用用户', (await automationStore.listEnabledUsers('daily-plan')).includes(userId))
+
+  // 无人值守只读 Agent 运行:mock 先尝试 SAFE_WRITE(应被拒),再查任务,最后汇报
+  currentRespond = (messages) => {
+    const round = messages.filter((m) => m.role === 'tool').length
+    if (round === 0) return { toolCalls: [{ name: 'createTask', arguments: JSON.stringify({ title: '自动化不该建的任务' }) }] }
+    if (round === 1) return { toolCalls: [{ name: 'getTasks', arguments: '{}' }] }
+    return { content: '今日计划:优先处理逾期事项。' }
+  }
+  const run = await automationScheduler.runAutomationForUser(userId, 'daily-plan')
+  check('自动化:只读运行 ok 收尾', run.status === 'ok' && run.summary.includes('今日计划'))
+  check('自动化:SAFE_WRITE 在只读会话未执行', (await taskService.getTasks(userId)).every((t) => t.title !== '自动化不该建的任务'))
+  const mainStatsAuto = await statsService.getStats(userId)
+  check('自动化:被拒调用不计入操作统计', mainStatsAuto.agent.byTool.every((t) => t.tool !== 'createTask'))
+  check('自动化:运行历史可查', (await automationStore.listRuns(userId, 'daily-plan', 10)).length >= 1)
+  check('自动化:Agent 运行产出通知', (await automationStore.listNotifications(userId, 30)).items.some((n) => n.title.startsWith('每日计划')))
+
+  // 逾期/阻塞扫描:独立用户造数据(先启用对应自动化)
+  const obUser = await insertUser()
+  await automationStore.setAutomationEnabled(obUser, 'overdue-blocked-scan', true)
+  await automationStore.setAutomationEnabled(obUser, 'deadline-reminder', true)
+  await taskService.createTask(obUser, { title: '盘-逾期', dueDate: Date.now() - 86_400_000 })
+  const blocker = await taskService.createTask(obUser, { title: '盘-阻塞源' })
+  const blocked = await taskService.createTask(obUser, { title: '盘-被阻塞' })
+  await taskService.setTaskDependencies(obUser, blocked.id, [blocker.id])
+  await automationScheduler.runAutomationForUser(obUser, 'overdue-blocked-scan')
+  const scanNotif = (await automationStore.listNotifications(obUser, 10)).items[0]
+  check('自动化:盘点生成通知', scanNotif.title.includes('逾期 1 项') && scanNotif.title.includes('被阻塞 1 项'))
+  check('自动化:通知内容含任务名与阻塞关系', scanNotif.body.includes('盘-逾期') && scanNotif.body.includes('盘-被阻塞') && scanNotif.body.includes('盘-阻塞源'))
+
+  // 截止提醒:24 小时内到期
+  await taskService.createTask(obUser, { title: '盘-即将到期', dueDate: Date.now() + 3_600_000 })
+  await automationScheduler.runAutomationForUser(obUser, 'deadline-reminder')
+  const dueNotif = (await automationStore.listNotifications(obUser, 10)).items[0]
+  check('自动化:截止提醒生成', dueNotif.title.includes('截止提醒') && dueNotif.body.includes('盘-即将到期'))
+
+  // 未启用的自动化运行被拒(409)
+  const stranger = await insertUser()
+  let rejected409 = false
+  try {
+    await automationScheduler.runAutomationForUser(stranger, 'daily-plan')
+  } catch (err) {
+    rejected409 = err.status === 409
+  }
+  check('自动化:未启用运行返回 409', rejected409)
 }
 
 /* ---------- 清理 ---------- */

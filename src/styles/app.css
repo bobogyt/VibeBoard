@@ -725,3 +725,204 @@ body {
   font-size: 13px;
   font-weight: 500;
 }
+
+/* ========== 数据统计页 ========== */
+.stats-page {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.stats-page__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.stats-page__title {
+  margin: 0;
+  font-size: 20px;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+}
+
+.stats-card__sub {
+  margin-top: 4px;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.stats-project-row + .stats-project-row {
+  margin-top: 12px;
+}
+
+.stats-project-row__head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  margin-bottom: 2px;
+}
+
+.stats-project-row__name {
+  font-weight: 500;
+}
+
+.stats-project-row__count {
+  font-size: 12px;
+  color: var(--text-secondary);
+  font-variant-numeric: tabular-nums;
+}
+
+.stats-dist-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 5px 0;
+}
+
+.stats-dist-row__label {
+  width: 88px;
+  display: flex;
+  justify-content: flex-start;
+}
+
+.stats-dist-row .ant-tag {
+  margin: 0;
+}
+
+.stats-dist-track {
+  flex: 1;
+  height: 8px;
+  border-radius: 4px;
+  background: rgba(128, 128, 128, 0.16);
+  overflow: hidden;
+}
+
+.stats-dist-fill {
+  height: 100%;
+  border-radius: 4px;
+  background: #5e6ad2;
+  transition: width 0.3s ease;
+}
+
+.stats-dist-row__count {
+  width: 32px;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-secondary);
+}
+
+.stats-bars {
+  display: flex;
+  align-items: flex-end;
+  gap: 6px;
+  min-height: 140px;
+}
+
+.stats-bar-col {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+}
+
+.stats-bar {
+  width: 70%;
+  max-width: 26px;
+  background: #5e6ad2;
+  border-radius: 3px 3px 0 0;
+}
+
+.stats-bar--empty {
+  background: rgba(128, 128, 128, 0.25);
+}
+
+.stats-bar-count {
+  font-size: 11px;
+  line-height: 14px;
+  font-variant-numeric: tabular-nums;
+}
+
+.stats-bar-label {
+  font-size: 10px;
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+
+.stats-trend__hint {
+  margin-top: 10px;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.stats-overdue-days {
+  color: var(--danger);
+  font-weight: 500;
+}
+
+@media (max-width: 860px) {
+  .stats-page .ant-col {
+    width: 100%;
+  }
+}
+
+/* ========== 自动化页与通知 ========== */
+.automations-page {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.automations-page__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.automations-page__title {
+  margin: 0;
+  font-size: 20px;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+}
+
+.automations-icon {
+  font-size: 20px;
+  color: #5e6ad2;
+}
+
+.automations-run__time {
+  margin-left: 10px;
+  font-size: 12px;
+  color: var(--text-secondary);
+  font-variant-numeric: tabular-nums;
+}
+
+.automations-notif__body {
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.automations-notif__time {
+  display: block;
+  margin-top: 4px;
+  font-variant-numeric: tabular-nums;
+}
+
+.notif-menu-item {
+  min-width: 200px;
+  max-width: 320px;
+}
+
+.notif-menu-item__title {
+  font-size: 13px;
+  white-space: normal;
+}
+
+.notif-menu-item__time {
+  font-size: 11px;
+  color: var(--text-secondary);
+  font-variant-numeric: tabular-nums;
+}

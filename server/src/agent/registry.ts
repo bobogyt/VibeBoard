@@ -6,6 +6,8 @@ export type ToolRisk = 'READ' | 'SAFE_WRITE' | 'HIGH_RISK'
 export interface ToolContext {
   userId?: string
   approved?: boolean
+  /** 只读会话(无人值守自动化):拒绝一切非 READ 工具,纵深防御第二层 */
+  readOnly?: boolean
 }
 
 export interface Tool {
@@ -31,12 +33,14 @@ export function getTool(name: string): Tool | null {
   return tools.get(name) ?? null
 }
 
-/** 汇总为 OpenAI 兼容 tools 数组,发给 GLM */
-export function listSchemas(): Array<{ type: string; function: Record<string, unknown> }> {
-  return [...tools.values()].map((t) => ({
-    type: 'function',
-    function: { name: t.name, description: t.description, parameters: t.parameters },
-  }))
+/** 汇总为 OpenAI 兼容 tools 数组,发给 GLM;readOnly 时只暴露 READ 工具(无人值守自动化) */
+export function listSchemas(readOnly = false): Array<{ type: string; function: Record<string, unknown> }> {
+  return [...tools.values()]
+    .filter((t) => (readOnly ? t.risk === 'READ' : true))
+    .map((t) => ({
+      type: 'function',
+      function: { name: t.name, description: t.description, parameters: t.parameters },
+    }))
 }
 
 export type { AgentEvent }

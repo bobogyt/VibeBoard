@@ -26,7 +26,7 @@ NestJS 11 + TypeScript(strict)(server/,独立 package.json,tsc 构建到 server/
 1. **保留 Linear 配色** `#5e6ad2`(light)/ `#6e79d8`(dark),通过 antd v6 ThemeConfig token 定制;用户明确否决过 antd 默认蓝
 2. **拖拽用 @dnd-kit**:antd 没有看板拖拽;不要尝试换成别的
 3. **不用 @ant-design/pro-components**:其 antd v6 支持仅在 beta 通道(3.1.14-x),稳定版 2.8.10 只支持 antd 4/5;布局壳用 antd 原生 Layout/Menu 自建(`src/layouts/BasicLayout.tsx`)
-4. **数据统计/任务归档是占位页**(antd Empty「开发中」),是用户主动要求的中后台观感,不是待实现功能承诺
+4. **占位页已全部落地(2026-09-10)**:数据统计页(StatsPage,五模块:项目完成率/优先级分布/逾期任务/日周完成趋势/Agent 操作统计)与任务归档页均已完整实现。支撑数据模型:tasks.completed_at(完成时间,saveBoard 事务内跟踪 done 迁移写入/清空,存量以 updated_at 回填)+ agent_operation_log 表(harness 埋点,仅记录实际执行的工具调用,拒绝/超时不算,写入失败不阻塞运行)
 5. **认证**:scrypt(内置 crypto,不要引入 bcrypt)+ Redis 会话;开放注册
 6. 看板列/卡片保留手写 DOM(拖拽需要),全局组件一律 antd
 7. **项目进度自动计算**:进度 = 关联任务中 done 占比,后端 LEFT JOIN 聚合,无任务时 progress=null(UI 显示「暂无关联任务」);status 仍手动维护。不要改成手动进度条
@@ -65,10 +65,11 @@ NestJS 11 + TypeScript(strict)(server/,独立 package.json,tsc 构建到 server/
 - **后端已迁移到 NestJS 11 + TS strict**(替换裸 Express,用户选定):server/ 成为独立 npm 工程(自己的 package.json/tsconfig,依赖不再挂在根),构建产物 server/dist;根脚本 `npm run server` = server/ 内 build + `node --env-file=.env --watch dist/main.js`。API 路径、请求/响应 JSON、错误文案与限速阈值与 Express 版逐字一致,前端零改动
 - 已含「项目管理」功能:projects 表(7 态状态/进度聚合/仓库/起止/技术栈)+ tasks.project_id 关联 + 卡片/表格双视图页
 - 已含 AI 助手(Agent Harness):16 工具(READ 5 + SAFE_WRITE 5 + HIGH_RISK 6)+ Loop + 守卫 + trace + SSE 执行可视化 + 前端 AgentChatDrawer + 模型自助设置弹窗;.env 的 GLM_* 降级为兜底
-- 已实测(2026-09-10,Nest 迁移后):`npm run build:server` 零错误;Agent Loop 45 项断言全过;全链路集成 84 项断言全过(本机 MySQL 3306 + mock GLM,独立库 vibeboard_it 自动清理);oxlint 零警告;前端 build 正常;Nest 服务冒烟(本机 MySQL 覆盖启动)health/404/401/登录话术/校验文案全部与旧版一致
+- 已实测(2026-09-10,含数据统计与自动化):`npm run build:server` 零错误;Agent Loop 45 项 + 全链路集成 108 项 + 并发设施 26 项断言全过(本机 MySQL 3306 + mock GLM,独立库 vibeboard_it 自动清理);oxlint 零警告;前端 build 正常;真隧道双 worker 冒烟(限速聚合/会话跨 worker)通过
 - **并发优化已完成(2026-09-10)**:限速/单运行锁/审批投递 Redis 外置(见决策 17)+ cluster 多进程。concurrency.test.mjs 26 项全过;WEB_WORKERS=2 冒烟:双 worker 健康检查轮询、注册限速跨 worker 聚合(11 次第 11 次 429)、登录会话跨 worker 共享(board/me/projects 均过)。当日隧道又断,冒烟用本机 MySQL + run-fake-redis 假 Redis 完成
 - **测试运行方式**:两套测试 import 的是 `server/dist`(编译产物),跑之前先 `npm run build:server`;loop 测试需要可达 MySQL 且库存在(应急:`MYSQL_DATABASE=<临时库> MYSQL_PASSWORD=123456` 先用 `dist/db.js` 的 initDb 建表,跑完 DROP),否则 resolveModelConfig 连不上会直接抛错
 - **待办**:① 用户填真实 Key 后五场景真实对话回归;② 隧道恢复后用真 Redis 复跑一次多 worker 冒烟(当日冒烟用的 run-fake-redis);③ 未来真多机部署:SSE 需粘性会话或网关层处理,agent 会话 trace 若要跨 worker 可读需外置
 - 2026-09-09 观察:SSH 隧道(13306/16379)会静默断开,后端起不来时先查 `netstat | grep 13306`;应急可用本机 MySQL(3306 root/123456)经环境变量覆盖启动(不改 .env),但 Redis 无本机替身,登录会话不可用(fail-closed 是有意的)
-- 数据统计、任务归档为占位页
+- 占位页已全部落地:数据统计(StatsPage)与任务归档均为完整功能
 - 后台进程不常驻:启动用 `npm run server` + `npm run dev`;**杀后端必须连 --watch 子进程一起杀**(TaskStop 只杀 shell 会留孤儿占着 3000:PowerShell 按 CommandLine 匹配 server/dist/main.js 清理)
+18. **自动化子系统(2026-09-10)**:四个内置自动化(每日计划/每周复盘 = 只读 Agent 无人值守运行;截止日期提醒/逾期与阻塞盘点 = 确定性扫描不经模型),目录模式在 `server/src/automation/catalog.ts`(新增自动化 = 加一行)。无人值守运行**必须 readOnly**(runAgent options + ToolContext.readOnly 双层:只暴露 READ 工具且拒绝写入,否则高危工具会挂起等人工审批直到超时);调度器(`automation/scheduler.ts`)用 croner(Asia/Shanghai)+ Redis 锁 `automation:leader` 选主,多 worker 只有 leader 触发,每次 tick 复核领导权;Agent 运行复用单运行锁,占用中记 skipped;调度运行绕过 HTTP 限速(用户主动开启且频率受 cron 约束)。扫描结果与 Agent 产出写入 notifications 表(保留 50 条),头部铃铛 60s 轮询未读数。测试:集成测试含 12 项自动化断言(只读拒绝写入/扫描通知/409/运行历史)

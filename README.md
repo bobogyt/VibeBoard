@@ -34,8 +34,9 @@ npm run preview
 ## 功能
 
 - 注册 / 登录 / 退出;每个账号独立数据
-- **任务看板**:Todo / Doing / Done 三列,新增 / 编辑 / 删除任务(标题必填、可选描述、所属项目、优先级 P0-P3、截止日期;删除有 Popconfirm 二次确认),拖拽排序与跨列移动
-  - 卡片上显示优先级彩色徽标与截止提示(已超期红字 / 今天到期橙色)
+- **任务看板**:Todo / Doing / Done 三列,新增 / 编辑 / 删除任务(标题必填、可选描述、所属项目、优先级 P0-P3、截止日期、前置任务依赖;删除有 Popconfirm 二次确认),拖拽排序与跨列移动
+  - 卡片上显示优先级彩色徽标与截止提示(已超期红字 / 今天到期橙色);被前置任务阻塞的卡片显示「前置 N」标签
+- **任务归档**:任务可移出看板归档(行保留,看板/缓存只含未归档任务),归档页查看全部归档,支持恢复回原列原位置与彻底删除(均整批原子);归档/删除后其他任务对它的前置引用自动清理
 - **项目管理**:维护开发项目(名称、7 态生命周期状态、描述、仓库地址、起止时间、技术栈标签),卡片 / 表格 / 时间线三种视图
   - 项目进度从任务自动计算:任务可关联项目,进度 = 已完成任务占比(无关联任务显示「暂无关联任务」)
   - 目标日期已过但未发布的项目显示「已超期」红字提示
@@ -49,10 +50,11 @@ npm run preview
   - 可观测:每步模型调用 / 工具入参 / 结果 / 时长落 `[agent]` 结构化日志与会话 trace(`GET /api/agent/sessions/:id`);前端只展示最终回答与工具摘要,不暴露推理过程
   - Agent 的写操作与用户手动保存共用用户级锁串行化;完成后前端自动刷新看板
 - **模型自助配置**:AI 助手抽屉右上角 ⚙ 打开「模型设置」——选供应商(智谱 GLM / DeepSeek,baseUrl 预置)→ 填 API Key(每供应商存一次,可留空沿用)→ 选模型(预设列表 + 可自行输入)→ 一键「保存并使用」;密钥按账号存 MySQL(`user_model_configs`),接口只回传掩码;未自配时回退 `server/.env` 的 GLM_*;自建/代理场景可用 `MODEL_BASE_URL_ZHIPU` / `MODEL_BASE_URL_DEEPSEEK` 覆盖目录地址
+- **数据统计**:五个模块——项目完成率(进度条 + 平均值)、优先级分布(P0-P3/无)、逾期任务清单(逾期天数高亮)、每日/每周完成趋势(轻量柱状图,基于 tasks.completed_at 完成时间跟踪)、Agent 操作统计(持久化操作日志:总次数/近 7 天/成功率/按工具聚合;仅记录实际执行,拒绝与超时不计入)
+- **自动化**:四个内置自动化(每日计划 / 每周复盘:只读 Agent 无人值守运行;截止日期提醒 / 逾期与阻塞盘点:确定性扫描),按用户开关启用,到点自动执行并产出通知;头部铃铛显示未读数(60s 轮询);多进程部署由 Redis 锁选主,只有 leader 触发;支持「立即运行」手动触发
 - 数据自动保存到 MySQL(500ms 防抖全量保存,乐观更新);刷新/换设备登录后数据一致
 - Redis 缓存:看板读路径命中直接返回;保存后写穿透更新(缓存写入过滤后的状态);Redis 故障自动降级直读 MySQL
-- 中后台布局:侧边栏菜单(任务看板 / 项目管理 / 数据统计* / 任务归档*),顶栏主题切换与用户菜单
-  - *数据统计、任务归档为占位页
+- 中后台布局:侧边栏菜单(任务看板 / 项目管理 / 数据统计 / 任务归档),顶栏主题切换与用户菜单;窄屏(<992px)侧边栏收起,由头部汉堡按钮打开抽屉导航
 - Light / Dark 主题(antd token 定制 Linear 靛蓝配色),首次访问跟随系统偏好
 - 响应式:窄屏侧边栏折叠为抽屉,看板单列堆叠
 
@@ -104,7 +106,7 @@ src/
 ```bash
 npm run build:server                          # 先构建(测试引用 server/dist 编译产物)
 MYSQL_DATABASE=<临时库> MYSQL_PASSWORD=... node server/test/agent-loop.test.mjs          # Loop 纯机制测试:45 项(需可达 MySQL 且库存在)
-node server/test/agent-integration.test.mjs   # 全链路集成(本机 MySQL + mock GLM):84 项,用独立库 vibeboard_it 并自动清理
+node server/test/agent-integration.test.mjs   # 全链路集成(本机 MySQL + mock GLM):108 项,用独立库 vibeboard_it 并自动清理
 node server/test/concurrency.test.mjs         # 并发设施(限速窗口/运行锁/审批跨进程路由):26 项,内嵌 mini-RESP 假服务器,无外部依赖
 ```
 
@@ -136,4 +138,8 @@ mock GLM(`server/test/mock-glm.mjs`)实现 OpenAI 兼容 `/chat/completions`;`se
 | DELETE | /api/agent/models/:provider | 清除某供应商已存密钥 |
 | POST | /api/agent/run | 运行 Agent 会话(自然语言指令) |
 | GET | /api/agent/sessions/:id | 会话 trace(仅本人) |
+| GET | /api/stats | 数据统计(项目完成率/优先级分布/逾期/趋势/Agent 操作) |
+| GET/PUT | /api/automations(/:id) | 自动化目录与用户开关 |
+| POST | /api/automations/:id/run | 立即执行一次自动化 |
+| GET/POST | /api/automations/runs · notifications(/read) | 运行历史与通知中心 |
 | GET | /api/health | MySQL/Redis 健康检查 |

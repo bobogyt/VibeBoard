@@ -14,6 +14,9 @@ export interface ToolOutcome {
  */
 export async function executeTool(tool: Tool | null, rawArguments: string | undefined, ctx: ToolContext = {}): Promise<ToolOutcome> {
   if (!tool) return { ok: false, error: '未知工具' }
+  if (ctx.readOnly && tool.risk !== 'READ') {
+    return { ok: false, error: '只读会话:当前为无人值守自动化运行,不允许执行任何写入工具' }
+  }
   if (tool.risk === 'HIGH_RISK' && ctx.approved !== true) {
     return { ok: false, error: '该工具为高危操作,需要用户人工确认后才能执行' }
   }

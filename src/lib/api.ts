@@ -1,5 +1,5 @@
 import { getToken, clearToken } from './session'
-import type { BoardState, Project, ProjectInput, Task } from '../types'
+import type { AutomationInfo, AutomationRunInfo, BoardStats, BoardState, NotificationItem, Project, ProjectInput, Task } from '../types'
 
 export class ApiError extends Error {
   status: number
@@ -174,6 +174,27 @@ export const api = {
     request<{ memory: Memory }>('/memories', { method: 'POST', body: { content } }),
 
   deleteMemory: (id: string) => request<{ ok: true }>(`/memories/${id}`, { method: 'DELETE' }),
+
+  getStats: () => request<BoardStats>('/stats'),
+
+  getAutomations: () => request<{ automations: AutomationInfo[] }>('/automations'),
+
+  setAutomationEnabled: (id: string, enabled: boolean) =>
+    request<{ ok: true; enabled: boolean }>(`/automations/${id}`, { method: 'PUT', body: { enabled } }),
+
+  runAutomation: (id: string) =>
+    request<{ status: string; summary: string | null; error: string | null; createdAt: number }>(`/automations/${id}/run`, {
+      method: 'POST',
+    }),
+
+  getAutomationRuns: (automationId?: string, limit = 20) =>
+    request<{ runs: AutomationRunInfo[] }>(
+      `/automations/runs?limit=${limit}${automationId ? `&automationId=${encodeURIComponent(automationId)}` : ''}`,
+    ),
+
+  getNotifications: (limit = 30) => request<{ unread: number; items: NotificationItem[] }>(`/automations/notifications?limit=${limit}`),
+
+  markNotificationsRead: () => request<{ updated: number }>('/automations/notifications/read', { method: 'POST' }),
 
   /** 流式执行 Agent:SSE 逐工具步骤回调 onEvent,返回最终完整结果 */
   agentRunStream: async (message: string, onEvent: AgentStepListener): Promise<AgentRunResult> => {

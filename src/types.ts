@@ -65,3 +65,86 @@ export interface ProjectInput {
   startDate: number | null
   dueDate: number | null
 }
+
+/* ---------- 数据统计 ---------- */
+
+export interface PriorityCounts {
+  P0: number
+  P1: number
+  P2: number
+  P3: number
+  none: number
+}
+
+export interface OverdueTaskInfo {
+  id: string
+  title: string
+  status: string
+  priority: TaskPriority | null
+  dueDate: number
+  daysOverdue: number
+}
+
+export interface TrendPoint {
+  label: string
+  count: number
+}
+
+export interface AgentToolStat {
+  tool: string
+  count: number
+  okCount: number
+}
+
+export interface ProjectStatItem {
+  id: string
+  name: string
+  status: ProjectStatus
+  progress: number | null
+  totalCount: number
+  doneCount: number
+}
+
+export interface BoardStats {
+  projects: {
+    total: number
+    tracked: number
+    averageProgress: number | null
+    items: ProjectStatItem[]
+  }
+  priorities: PriorityCounts
+  overdue: OverdueTaskInfo[]
+  trends: { daily: TrendPoint[]; weekly: TrendPoint[] }
+  agent: { total: number; last7d: number; successRate: number | null; byTool: AgentToolStat[] }
+}
+
+/* ---------- 自动化 ---------- */
+
+export interface AutomationInfo {
+  id: string
+  name: string
+  description: string
+  type: 'agent' | 'scan'
+  cron: string
+  cronLabel: string
+  enabled: boolean
+  lastRunAt: number | null
+}
+
+export interface AutomationRunInfo {
+  id: string
+  automationId: string
+  status: 'ok' | 'failed' | 'skipped'
+  summary: string | null
+  error: string | null
+  createdAt: number
+}
+
+export interface NotificationItem {
+  id: string
+  automationId: string | null
+  title: string
+  body: string | null
+  read: boolean
+  createdAt: number
+}

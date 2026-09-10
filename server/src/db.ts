@@ -119,6 +119,14 @@ export async function initDb(): Promise<void> {
       if (err.code !== 'ER_DUP_FIELDNAME') throw err
     })
   }
+  // 存量库的 tasks 表补 completed_at 列(完成时间,毫秒;每日/每周完成趋势的数据来源)
+  if (!taskColNames.has('completed_at')) {
+    await boot.query('ALTER TABLE tasks ADD COLUMN completed_at BIGINT NULL').catch((err: { code?: string }) => {
+      if (err.code !== 'ER_DUP_FIELDNAME') throw err
+    })
+    // 存量回填:已完成任务以 updated_at 近似首次完成时间(该列此前任何编辑都会刷新,仅作历史近似)
+    await boot.query("UPDATE tasks SET completed_at = updated_at WHERE status = 'done' AND completed_at IS NULL")
+  }
   await boot.query(`
     CREATE TABLE IF NOT EXISTS user_model_configs (
       user_id CHAR(36) NOT NULL,
@@ -140,6 +148,52 @@ export async function initDb(): Promise<void> {
       created_at BIGINT NOT NULL,
       updated_at BIGINT NOT NULL,
       KEY idx_user (user_id, updated_at)
+    ) CHARACTER SET utf8mb4
+  `)
+  // Agent 操作日志:每次工具实际执行落一行,供数据统计页做操作统计(失败不阻塞 Agent 运行)
+  await boot.query(`
+    CREATE TABLE IF NOT EXISTS agent_operation_log (
+      id CHAR(36) PRIMARY KEY,
+      user_id CHAR(36) NOT NULL,
+      tool VARCHAR(40) NOT NULL,
+      ok TINYINT NOT NULL,
+      created_at BIGINT NOT NULL,
+      KEY idx_user_time (user_id, created_at)
+    ) CHARACTER SET utf8mb4
+  `)
+  // 自动化:用户开关 + 运行历史 + 通知中心
+  await boot.query(`
+    CREATE TABLE IF NOT EXISTS user_automations (
+      user_id CHAR(36) NOT NULL,
+      automation_id VARCHAR(40) NOT NULL,
+      enabled TINYINT NOT NULL DEFAULT 0,
+      last_run_at BIGINT NULL,
+      updated_at BIGINT NOT NULL,
+      PRIMARY KEY (user_id, automation_id)
+    ) CHARACTER SET utf8mb4
+  `)
+  await boot.query(`
+    CREATE TABLE IF NOT EXISTS automation_runs (
+      id CHAR(36) PRIMARY KEY,
+      user_id CHAR(36) NOT NULL,
+      automation_id VARCHAR(40) NOT NULL,
+      status VARCHAR(10) NOT NULL,
+      summary TEXT NULL,
+      error VARCHAR(500) NULL,
+      created_at BIGINT NOT NULL,
+      KEY idx_user_auto_time (user_id, automation_id, created_at)
+    ) CHARACTER SET utf8mb4
+  `)
+  await boot.query(`
+    CREATE TABLE IF NOT EXISTS notifications (
+      id CHAR(36) PRIMARY KEY,
+      user_id CHAR(36) NOT NULL,
+      automation_id VARCHAR(40) NULL,
+      title VARCHAR(200) NOT NULL,
+      body TEXT NULL,
+      is_read TINYINT NOT NULL DEFAULT 0,
+      created_at BIGINT NOT NULL,
+      KEY idx_user_read_time (user_id, is_read, created_at)
     ) CHARACTER SET utf8mb4
   `)
   await boot.end()

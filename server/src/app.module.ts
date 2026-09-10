@@ -7,6 +7,8 @@ import { MemoriesController } from './routes/memories.controller'
 import { TasksController } from './routes/tasks.controller'
 import { AgentController } from './routes/agent.controller'
 import { ModelConfigController } from './routes/model-config.controller'
+import { StatsController } from './routes/stats.controller'
+import { AutomationsController } from './routes/automations.controller'
 
 /** 单模块组织全部控制器:业务层为纯函数模块(服务层单例),无需额外 provider 注入 */
 @Module({
@@ -19,6 +21,8 @@ import { ModelConfigController } from './routes/model-config.controller'
     TasksController,
     AgentController,
     ModelConfigController,
+    StatsController,
+    AutomationsController,
   ],
 })
 export class AppModule {}

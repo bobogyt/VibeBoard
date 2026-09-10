@@ -10,6 +10,7 @@ import { intentLabel } from './stepLabel'
 import { getTasks } from '../services/taskService'
 import { listMemories } from '../services/memoryService'
 import { resolveModelConfig, type ResolvedModelConfig } from '../services/modelConfigService'
+import { logAgentOperation } from '../services/statsService'
 import { httpError } from '../http/http-error'
 
 // 同一工具+同样入参连续失败的容忍次数:第 2 次注入纠正提示,第 3 次直接终止,不允许无限自动重试
@@ -109,7 +110,10 @@ async function runWithApproval(session: AgentSession, tool: Tool, call: { name: 
   if (!decision.approved) {
     return { ok: false, error: decision.reason === 'timeout' ? '确认超时,已自动取消该操作' : '用户拒绝了该操作' }
   }
-  return executeTool(tool, call.arguments, { userId, approved: true })
+  const outcome = await executeTool(tool, call.arguments, { userId, approved: true })
+  // 只有真正执行过的操作才计入操作统计(拒绝/超时不执行,不入日志)
+  void logAgentOperation(userId, tool.name, outcome.ok)
+  return outcome
 }
 
 export interface AgentRunResult {
@@ -132,11 +136,13 @@ function publicSession(session: AgentSession): AgentRunResult {
 }
 
 /** 运行一次 Agent 会话:GLM 多轮 tool calling,直到模型给出最终回答或触发守卫;
- * onEvent 用于执行过程可视化(工具步骤级中文摘要),不传时行为与原来完全一致 */
+ * onEvent 用于执行过程可视化(工具步骤级中文摘要),不传时行为与原来完全一致;
+ * readOnly=true 为无人值守自动化模式:只暴露 READ 工具且拒绝执行任何写入(不会触发人工确认挂起);
+ * acquireSlot=false 供已持有运行席位的调用方(自动化调度器)使用,避免自我 409 */
 export async function runAgent(
   userId: string,
   userMessage: unknown,
-  { onEvent }: { onEvent?: (event: import('./session').AgentEvent) => void } = {},
+  { onEvent, readOnly = false, acquireSlot = true }: { onEvent?: (event: import('./session').AgentEvent) => void; readOnly?: boolean; acquireSlot?: boolean } = {},
 ): Promise<AgentRunResult> {
   if (userId === undefined) {
     console.error('[agent] runAgent called with undefined userId, stack:')
@@ -146,20 +152,22 @@ export async function runAgent(
     throw httpError(400, '消息需为 1-2000 字')
   }
   // 单用户单运行会话:Redis NX 跨进程互斥(降级时为进程内);占位到运行结束,finally 必释放
-  if (!(await acquireRunSlot(userId))) throw httpError(409, '上一个请求还在执行中,请稍候')
-
-  try {
-    return await runSession(userId, userMessage, { onEvent })
-  } finally {
-    await releaseRunSlot(userId)
+  if (acquireSlot) {
+    if (!(await acquireRunSlot(userId))) throw httpError(409, '上一个请求还在执行中,请稍候')
+    try {
+      return await runSession(userId, userMessage, { onEvent, readOnly })
+    } finally {
+      await releaseRunSlot(userId)
+    }
   }
+  return runSession(userId, userMessage, { onEvent, readOnly })
 }
 
 /** 单次会话主体(调用方已持有运行席位) */
 async function runSession(
   userId: string,
   userMessage: string,
-  { onEvent }: { onEvent?: (event: import('./session').AgentEvent) => void },
+  { onEvent, readOnly = false }: { onEvent?: (event: import('./session').AgentEvent) => void; readOnly?: boolean },
 ): Promise<AgentRunResult> {
   const modelConfig: ResolvedModelConfig | null = await resolveModelConfig(userId)
   if (!modelConfig) {
@@ -195,7 +203,7 @@ async function runSession(
       touch(session)
 
       const t0 = Date.now()
-      const res = await chatCompletion({ messages: session.messages as unknown as ChatMessage[], tools: listSchemas(), modelConfig })
+      const res = await chatCompletion({ messages: session.messages as unknown as ChatMessage[], tools: listSchemas(readOnly), modelConfig })
       traceModel(session, {
         duration: Date.now() - t0,
         toolCalls: res.toolCalls.map((c) => c.name),
@@ -215,9 +223,14 @@ async function runSession(
         const tool = getTool(call.name)
         const t1 = Date.now()
         const outcome =
-          tool && tool.risk === 'HIGH_RISK'
+          tool && tool.risk === 'HIGH_RISK' && !readOnly
             ? await runWithApproval(session, tool, call, userId)
-            : await executeTool(tool, call.arguments, { userId })
+            : await executeTool(tool, call.arguments, { userId, readOnly })
+        // 操作统计:普通/安全写工具直接记录;高危工具由 runWithApproval 在批准执行后记录;
+        // 只读拒绝的调用未真正执行,不计入
+        if (tool && !readOnly && tool.risk !== 'HIGH_RISK') {
+          void logAgentOperation(userId, tool.name, outcome.ok)
+        }
         traceTool(session, {
           name: call.name,
           args: parseArgsPreview(call.arguments),
