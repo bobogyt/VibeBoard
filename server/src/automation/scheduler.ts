@@ -7,6 +7,7 @@ import { createNotification, isAutomationEnabled, listEnabledUsers, recordRun } 
 import { acquireRunSlot, releaseRunSlot } from '../agent/session'
 import { runAgent } from '../agent/harness'
 import { httpError } from '../http/http-error'
+import { syncGithubPrs } from '../services/githubService'
 
 /* ---------- 运行器 ---------- */
 
@@ -151,11 +152,29 @@ export async function runAutomationForUser(userId: string, automationId: string)
   return run
 }
 
-// scan 分发(deadline-reminder 与 overdue-blocked-scan 各自的实现)
+// scan 分发(各扫描型自动化的具体实现)
 async function runDeadlineBlockedScan(userId: string, def: AutomationDef): Promise<AutomationResult> {
   if (def.id === 'deadline-reminder') return runDeadlineReminder(userId)
   if (def.id === 'overdue-blocked-scan') return runOverdueBlockedScan(userId)
+  if (def.id === 'github-pr-sync') return runGithubPrSync(userId)
   throw httpError(400, `扫描型自动化缺少实现:${def.id}`)
+}
+
+/** GitHub PR 合并同步:检查关联 PR,合并后任务移至 Done(通知按次汇总,与其他自动化一致) */
+async function runGithubPrSync(userId: string): Promise<AutomationResult> {
+  const result = await syncGithubPrs(userId)
+  if (result.moved > 0) {
+    return {
+      status: 'ok',
+      summary: `检查 ${result.checked} 个 PR,${result.moved} 个已合并并移至 Done`,
+      error: null,
+      notify: { title: `GitHub PR 同步:${result.moved} 个任务已完成`, body: result.movedLines.join('\n') },
+    }
+  }
+  if (result.checked > 0 && result.errors.length === result.checked) {
+    return { status: 'failed', summary: null, error: `GitHub 检查全部失败:${result.errors[0]}`, notify: null }
+  }
+  return { status: 'ok', summary: `检查 ${result.checked} 个 PR,暂无新合并`, error: null, notify: null }
 }
 
 /* ---------- 调度器(多进程下由 Redis 锁选出唯一 leader) ---------- */

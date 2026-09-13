@@ -66,3 +66,15 @@ export class AgentRateLimitGuard implements CanActivate {
     return true
   }
 }
+
+/* ---------- GitHub 限速:按用户每分钟 60 次(服务端还带 60s 响应缓存;防刷穿 GitHub 匿名 60 次/时配额) ---------- */
+const githubLimiter = createRateLimiter({ windowMs: 60_000, max: 60, prefix: 'github', redis })
+
+@Injectable()
+export class GithubRateLimitGuard implements CanActivate {
+  async canActivate(ctx: ExecutionContext): Promise<boolean> {
+    const req = getRequest(ctx)
+    if (!(await githubLimiter.tryTake(String(req.userId)))) throw httpError(429, TOO_MANY)
+    return true
+  }
+}

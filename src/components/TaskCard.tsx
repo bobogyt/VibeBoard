@@ -1,8 +1,8 @@
 import { useEffect, useRef } from 'react'
 import type { CSSProperties } from 'react'
 import { useSortable } from '@dnd-kit/sortable'
-import { Button, Popconfirm, Tag } from 'antd'
-import { DeleteOutlined, EditOutlined } from '@ant-design/icons'
+import { Button, Popconfirm, Tag, Tooltip } from 'antd'
+import { DeleteOutlined, EditOutlined, GithubOutlined } from '@ant-design/icons'
 import dayjs from 'dayjs'
 import type { Task, TaskPriority } from '../types'
 
@@ -69,7 +69,7 @@ export default function TaskCard({ task, blocked, depsCount, onEdit, onDelete }:
       <div className="task-card__content">
         <p className="task-card__title">{task.title}</p>
         {task.description && <p className="task-card__desc">{task.description}</p>}
-        {(task.priority || due || depsCount > 0) && (
+        {(task.priority || due || depsCount > 0 || (task.githubLinks?.length ?? 0) > 0) && (
           <div className="task-card__meta">
             {blocked && (
               <Tag className="task-card__tag" color="red">
@@ -83,6 +83,13 @@ export default function TaskCard({ task, blocked, depsCount, onEdit, onDelete }:
               <Tag className="task-card__tag" color={PRIORITY_COLORS[task.priority]}>
                 {task.priority}
               </Tag>
+            )}
+            {(task.githubLinks?.length ?? 0) > 0 && (
+              <Tooltip title={task.githubLinks!.map((l) => `${l.type === 'pr' ? 'PR' : 'Issue'} #${l.number} · ${l.title ?? ''}`).join('\n')}>
+                <Tag className="task-card__tag" color="purple" icon={<GithubOutlined />}>
+                  {task.githubLinks!.length > 1 ? `#${task.githubLinks![0].number} +${task.githubLinks!.length - 1}` : `#${task.githubLinks![0].number}`}
+                </Tag>
+              </Tooltip>
             )}
             {due && (
               <span className={`task-card__due task-card__due--${dueState}`}>

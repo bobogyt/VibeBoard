@@ -64,6 +64,7 @@ npm run preview
 - **模型自助配置**:AI 助手抽屉右上角 ⚙ 打开「模型设置」——选供应商(智谱 GLM / DeepSeek,baseUrl 预置)→ 填 API Key(每供应商存一次,可留空沿用)→ 选模型(预设列表 + 可自行输入)→ 一键「保存并使用」;密钥按账号存 MySQL(`user_model_configs`),接口只回传掩码;未自配时回退 `server/.env` 的 GLM_*;自建/代理场景可用 `MODEL_BASE_URL_ZHIPU` / `MODEL_BASE_URL_DEEPSEEK` 覆盖目录地址
 - **数据统计**:五个模块——项目完成率(进度条 + 平均值)、优先级分布(P0-P3/无)、逾期任务清单(逾期天数高亮)、每日/每周完成趋势(轻量柱状图,基于 tasks.completed_at 完成时间跟踪)、Agent 操作统计(持久化操作日志:总次数/近 7 天/成功率/按工具聚合;仅记录实际执行,拒绝与超时不计入)
 - **自动化**:四个内置自动化(每日计划 / 每周复盘:只读 Agent 无人值守运行;截止日期提醒 / 逾期与阻塞盘点:确定性扫描),按用户开关启用,到点自动执行并产出通知;头部铃铛显示未读数(60s 轮询);多进程部署由 Redis 锁选主,只有 leader 触发;支持「立即运行」手动触发
+- **GitHub 集成**:项目仓库地址填 `github.com/{owner}/{repo}` 即完成绑定;项目卡片 GitHub 图标打开仓库抽屉,浏览 Issue / PR / 提交 / 分支(公开仓库匿名可用,私有仓库在抽屉内配置 PAT,密文落库只回掩码);Issue 一键转任务(标题带编号、描述附来源链接与作者,自动建立关联);任意 Issue/PR 可关联到现有任务,任务卡片显示 `#n` 标签、编辑弹窗可解除;自动化「GitHub PR 同步」每 30 分钟检查关联的 PR,发现已合并自动把任务移至 Done 并通知(关联已合并 PR 时立即生效);服务端 60 次/分/用户限速 + 60s 响应缓存保护 GitHub 配额
 - 数据自动保存到 MySQL(500ms 防抖全量保存,乐观更新);刷新/换设备登录后数据一致
 - Redis 缓存:看板读路径命中直接返回;保存后写穿透更新(缓存写入过滤后的状态);Redis 故障自动降级直读 MySQL
 - 中后台布局:侧边栏菜单(任务看板 / 项目管理 / 数据统计 / 任务归档),顶栏主题切换与用户菜单;窄屏(<992px)侧边栏收起,由头部汉堡按钮打开抽屉导航
@@ -154,4 +155,8 @@ mock GLM(`server/test/mock-glm.mjs`)实现 OpenAI 兼容 `/chat/completions`;`se
 | GET/PUT | /api/automations(/:id) | 自动化目录与用户开关 |
 | POST | /api/automations/:id/run | 立即执行一次自动化 |
 | GET/POST | /api/automations/runs · notifications(/read) | 运行历史与通知中心 |
+| GET/PUT/DELETE | /api/github/config | GitHub PAT(掩码回显/保存密文/清除) |
+| GET/POST | /api/github/links(/:id) | 任务↔Issue/PR 关联(查询/建立/解除) |
+| GET | /api/github/repos/:owner/:repo/(info\|issues\|pulls\|commits\|branches) | 仓库浏览(60s 服务端缓存) |
+| POST | /api/github/import-issue | GitHub Issue 转看板任务 |
 | GET | /api/health | MySQL/Redis 健康检查 |

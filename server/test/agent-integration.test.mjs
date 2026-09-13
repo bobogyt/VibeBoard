@@ -21,6 +21,85 @@ await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve))
 const { port } = server.address()
 process.env.GLM_BASE_URL = `http://127.0.0.1:${port}`
 
+/* mock GitHub API:GITHUB_API_BASE 必须在 import dist 服务前注入(模块级常量) */
+const ghState = { pr5Merged: false }
+const ghIssue = (over = {}) => ({
+  number: 7,
+  title: 'Fix login bug',
+  state: 'open',
+  html_url: 'https://github.com/octo/demo/issues/7',
+  body: '登录页在移动端白屏,需修复。',
+  user: { login: 'alice' },
+  updated_at: '2026-09-01T00:00:00Z',
+  ...over,
+})
+const ghPull = (over = {}) => ({
+  number: 5,
+  title: 'Fix mobile login',
+  state: ghState.pr5Merged ? 'closed' : 'open',
+  merged: ghState.pr5Merged,
+  merged_at: ghState.pr5Merged ? '2026-09-10T08:00:00Z' : null,
+  html_url: 'https://github.com/octo/demo/pull/5',
+  user: { login: 'carol' },
+  updated_at: '2026-09-10T08:00:00Z',
+  ...over,
+})
+const { createServer } = await import('node:http')
+const ghServer = createServer((req, res) => {
+  const url = new URL(req.url, 'http://127.0.0.1')
+  const path = url.pathname
+  const send = (code, data) => {
+    res.writeHead(code, { 'Content-Type': 'application/json' })
+    res.end(JSON.stringify(data))
+  }
+  if (path === '/repos/octo/demo') {
+    return send(200, {
+      description: 'mock repo',
+      default_branch: 'main',
+      stargazers_count: 42,
+      open_issues_count: 3,
+      html_url: 'https://github.com/octo/demo',
+    })
+  }
+  if (path === '/repos/octo/demo/issues') {
+    const state = url.searchParams.get('state') || 'open'
+    const all = [
+      ghIssue(),
+      // 99 是混入 issues 端点的 PR,列表应过滤、单取时应纠正类型
+      ghIssue({ number: 99, title: 'PR sneaks into issues', pull_request: { url: 'x' } }),
+      ghIssue({ number: 8, title: 'Old issue', state: 'closed' }),
+    ]
+    return send(200, state === 'all' ? all : all.filter((i) => i.state === state))
+  }
+  if (path === '/repos/octo/demo/issues/7') return send(200, ghIssue())
+  if (path === '/repos/octo/demo/issues/9') {
+    return send(200, ghIssue({ number: 9, title: 'Actually a PR', html_url: 'https://github.com/octo/demo/pull/9', user: { login: 'bob' }, pull_request: { url: 'x' } }))
+  }
+  if (path === '/repos/octo/demo/pulls') return send(200, [ghPull()])
+  if (path === '/repos/octo/demo/pulls/5') return send(200, ghPull())
+  if (path === '/repos/octo/demo/pulls/9') {
+    return send(200, ghPull({ number: 9, title: 'Actually a PR', html_url: 'https://github.com/octo/demo/pull/9', user: { login: 'bob' } }))
+  }
+  if (path === '/repos/octo/demo/commits') {
+    return send(200, [
+      {
+        sha: 'abcdef1234567890abcdef',
+        html_url: 'https://github.com/octo/demo/commit/abcdef1234567890',
+        commit: { message: 'feat: initial\n\nfull body', author: { name: 'alice', date: '2026-09-05T10:00:00Z' } },
+      },
+    ])
+  }
+  if (path === '/repos/octo/demo/branches') {
+    return send(200, [
+      { name: 'main', commit: { sha: 'abcdef1234567890abcdef' }, protected: true },
+      { name: 'dev', commit: { sha: '1234567890abcdef12345' }, protected: false },
+    ])
+  }
+  send(404, { message: 'Not Found' })
+})
+await new Promise((resolve) => ghServer.listen(0, '127.0.0.1', resolve))
+process.env.GITHUB_API_BASE = `http://127.0.0.1:${ghServer.address().port}`
+
 const { initDb, pool } = await import('../dist/db.js')
 const { registerAllTools } = await import('../dist/agent/tools/index.js')
 const { listSchemas } = await import('../dist/agent/registry.js')
@@ -33,6 +112,8 @@ const modelConfigService = await import('../dist/services/modelConfigService.js'
 const statsService = await import('../dist/services/statsService.js')
 const automationScheduler = await import('../dist/automation/scheduler.js')
 const automationStore = await import('../dist/automation/store.js')
+const automationCatalog = await import('../dist/automation/catalog.js')
+const githubService = await import('../dist/services/githubService.js')
 const { bodyContainsReplacementChar } = await import('../dist/http/encoding-guard.js')
 const { randomUUID } = await import('node:crypto')
 
@@ -810,9 +891,129 @@ const t3 = await taskService.createTask(userId, { title: '已完成任务', stat
   )
 }
 
+/* ---------- GitHub 集成(仓库浏览/Token 加密/关联/转任务/PR 合并同步) ---------- */
+{
+  const insertUser = async () => {
+    const id = randomUUID()
+    await pool.execute('INSERT INTO users (id, username, password_hash, created_at) VALUES (?, ?, ?, ?)', [
+      id,
+      `it_gh_${Date.now()}_${Math.floor(Math.random() * 1000)}`,
+      'x:y',
+      Date.now(),
+    ])
+    return id
+  }
+  const ghUser = await insertUser()
+  const expectStatus = async (fn, status) => {
+    try {
+      await fn()
+      return false
+    } catch (err) {
+      return err.status === status
+    }
+  }
+
+  // 地址解析
+  check('GitHub:解析标准仓库地址', githubService.parseRepoUrl('https://github.com/octo/demo')?.owner === 'octo')
+  check('GitHub:.git 后缀与末尾斜杠可解析', githubService.parseRepoUrl('https://github.com/octo/demo.git/')?.repo === 'demo')
+  check(
+    'GitHub:非 GitHub 地址/空值返回 null',
+    githubService.parseRepoUrl('https://gitlab.com/octo/demo') === null &&
+      githubService.parseRepoUrl('not a url') === null &&
+      githubService.parseRepoUrl('') === null,
+  )
+
+  // Token 配置:密文落库 + 掩码回传 + 格式校验
+  await githubService.saveGithubToken(ghUser, 'ghp_testtoken123')
+  const [tokRows] = await pool.query('SELECT token FROM user_github_configs WHERE user_id = ?', [ghUser])
+  check('GitHub:Token 密文落库(v1 前缀)', String(tokRows[0].token).startsWith('v1:'))
+  const cfgInfo = await githubService.getGithubConfigInfo(ghUser)
+  check(
+    'GitHub:配置回传掩码不含明文',
+    cfgInfo.configured === true && cfgInfo.tokenHint.includes('***') && !cfgInfo.tokenHint.includes('ghp_testtoken123'),
+  )
+  check('GitHub:Token 过短被拒(400)', await expectStatus(() => githubService.saveGithubToken(ghUser, 'short'), 400))
+
+  // 仓库数据(经 mock GitHub)
+  const info = await githubService.fetchRepoInfo(ghUser, 'octo', 'demo')
+  check('GitHub:仓库信息(DTO 精简字段)', info.defaultBranch === 'main' && info.stars === 42)
+  const { issues } = await githubService.fetchIssues(ghUser, 'octo', 'demo', { state: 'all' })
+  check('GitHub:Issue 列表过滤 PR 混入', issues.some((i) => i.number === 7) && issues.every((i) => i.number !== 99))
+  const { branches } = await githubService.fetchBranches(ghUser, 'octo', 'demo')
+  check('GitHub:分支列表', branches.some((b) => b.name === 'main' && b.protected))
+  const { commits } = await githubService.fetchCommits(ghUser, 'octo', 'demo', { branch: 'main' })
+  check('GitHub:提交列表(sha 截断/首行消息)', commits[0].sha.length === 7 && commits[0].message === 'feat: initial')
+  check('GitHub:owner 路径注入被拒(400)', await expectStatus(() => githubService.fetchRepoInfo(ghUser, 'a/b', 'demo'), 400))
+
+  // 关联生命周期
+  const ghTask = await taskService.createTask(ghUser, { title: '关-任务' })
+  const { link } = await githubService.linkTaskToGithub(ghUser, ghTask.id, { owner: 'octo', repo: 'demo', type: 'issue', number: 7 })
+  check('GitHub:关联回填标题与状态', link.title === 'Fix login bug' && link.state === 'open')
+  const { link: prLink9 } = await githubService.linkTaskToGithub(ghUser, ghTask.id, { owner: 'octo', repo: 'demo', type: 'issue', number: 9 })
+  check('GitHub:PR 编号当 Issue 关联时自动纠正类型', prLink9.type === 'pr')
+  check('GitHub:关联 open PR 任务不移动', (await taskService.getTask(ghUser, ghTask.id)).status !== 'done')
+  check('GitHub:重复关联被拒(409)', await expectStatus(
+    () => githubService.linkTaskToGithub(ghUser, ghTask.id, { owner: 'octo', repo: 'demo', type: 'issue', number: 7 }),
+    409,
+  ))
+  check('GitHub:关联不存在的任务被拒(404)', await expectStatus(
+    () => githubService.linkTaskToGithub(ghUser, randomUUID(), { owner: 'octo', repo: 'demo', type: 'issue', number: 7 }),
+    404,
+  ))
+  check('GitHub:关联列表', (await githubService.listGithubLinks(ghUser)).length === 2)
+  await pool.query('DELETE FROM tasks WHERE id = ?', [ghTask.id])
+  const cleaned = await githubService.cleanupDanglingLinks(ghUser)
+  check('GitHub:任务删除后悬空关联被清理', cleaned === 2 && (await githubService.listGithubLinks(ghUser)).length === 0)
+
+  // Issue 转任务
+  const { task: imported, link: importLink } = await githubService.importIssueAsTask(ghUser, {
+    owner: 'octo',
+    repo: 'demo',
+    number: 7,
+  })
+  check('GitHub:Issue 转任务(标题带编号)', imported.title === '#7 Fix login bug')
+  const importedFull = await taskService.getTask(ghUser, imported.id)
+  check('GitHub:转任务描述含来源链接与作者', importedFull.description.includes('github.com/octo/demo/issues/7') && importedFull.description.includes('alice'))
+  check('GitHub:转任务自动建立关联', importLink.taskId === imported.id && importLink.type === 'issue')
+  const otherUser = await insertUser()
+  const otherProject = await projectService.createProject(otherUser, { name: '他人的项目' })
+  check('GitHub:转任务指向他人项目被拒(404)', await expectStatus(
+    () => githubService.importIssueAsTask(ghUser, { owner: 'octo', repo: 'demo', number: 7, projectId: otherProject.id }),
+    404,
+  ))
+
+  // PR 合并同步:先以 open 状态建关联 → mock 翻转为 merged → 同步应移 Done 并更新关联
+  const prTask = await taskService.createTask(ghUser, { title: '同-PR任务' })
+  await githubService.linkTaskToGithub(ghUser, prTask.id, { owner: 'octo', repo: 'demo', type: 'pr', number: 5 })
+  ghState.pr5Merged = true
+  githubService.clearGithubResponseCache()
+  const sync1 = await githubService.syncGithubPrs(ghUser)
+  const afterTask = await taskService.getTask(ghUser, prTask.id)
+  check('GitHub:同步检测到合并并把任务移至 Done', sync1.moved === 1 && afterTask.status === 'done')
+  const afterLinks = await githubService.listGithubLinks(ghUser)
+  const prLink5 = afterLinks.find((l) => l.number === 5 && l.type === 'pr')
+  check('GitHub:同步更新关联 merged 状态与时间', prLink5?.merged === true && prLink5?.mergedAt !== null)
+  const sync2 = await githubService.syncGithubPrs(ghUser)
+  check('GitHub:已合并 PR 不重复移动', sync2.moved === 0)
+
+  // 直接关联已合并 PR:建立关联即移 Done(不经同步)
+  const mergedLinkTask = await taskService.createTask(ghUser, { title: '同-直接关联已合并' })
+  const mergedLink = await githubService.linkTaskToGithub(ghUser, mergedLinkTask.id, {
+    owner: 'octo', repo: 'demo', type: 'pr', number: 5,
+  })
+  check(
+    'GitHub:关联已合并 PR 立即移 Done',
+    mergedLink.taskMovedToDone === true && (await taskService.getTask(ghUser, mergedLinkTask.id)).status === 'done',
+  )
+
+  // 自动化目录收录
+  check('GitHub:PR 同步已注册为自动化', automationCatalog.getAutomation('github-pr-sync') !== null)
+}
+
 /* ---------- 清理 ---------- */
 await pool.query('DROP DATABASE IF EXISTS vibeboard_it')
 await pool.end()
 server.close()
+ghServer.close()
 console.log(`\n${passed} checks passed${process.exitCode ? '(含失败项)' : ''}`)
 process.exit(process.exitCode ?? 0)

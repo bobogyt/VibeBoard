@@ -1,5 +1,15 @@
 import { getToken, clearToken } from './session'
-import type { AutomationInfo, AutomationRunInfo, BoardStats, BoardState, NotificationItem, Project, ProjectInput, Task } from '../types'
+import type {
+  AutomationInfo,
+  AutomationRunInfo,
+  BoardStats,
+  BoardState,
+  GithubLink,
+  NotificationItem,
+  Project,
+  ProjectInput,
+  Task,
+} from '../types'
 
 export class ApiError extends Error {
   status: number
@@ -123,6 +133,57 @@ export interface Memory {
   id: string
   content: string
   updatedAt: number
+}
+
+/* ---------- GitHub 集成 ---------- */
+
+export interface GithubConfigInfo {
+  configured: boolean
+  tokenHint: string | null
+}
+
+export interface GithubRepoInfo {
+  owner: string
+  repo: string
+  description: string | null
+  defaultBranch: string
+  stars: number
+  openIssuesCount: number
+  htmlUrl: string
+}
+
+export interface GithubIssueItem {
+  number: number
+  title: string
+  state: 'open' | 'closed'
+  htmlUrl: string
+  author: string
+  updatedAt: number
+}
+
+export interface GithubPullItem {
+  number: number
+  title: string
+  state: 'open' | 'closed'
+  merged: boolean
+  mergedAt: number | null
+  htmlUrl: string
+  author: string
+  updatedAt: number
+}
+
+export interface GithubCommitItem {
+  sha: string
+  message: string
+  author: string
+  date: number
+  htmlUrl: string
+}
+
+export interface GithubBranchItem {
+  name: string
+  sha: string
+  protected: boolean
 }
 
 export const api = {
@@ -274,6 +335,49 @@ export const api = {
 
   deleteAgentModel: (provider: string) =>
     request<AgentModelsInfo>(`/agent/models/${provider}`, { method: 'DELETE' }),
+
+  /* ---------- GitHub 集成 ---------- */
+
+  getGithubConfig: () => request<GithubConfigInfo>('/github/config'),
+
+  saveGithubToken: (token: string) =>
+    request<GithubConfigInfo>('/github/config', { method: 'PUT', body: { token } }),
+
+  deleteGithubToken: () => request<{ ok: true }>('/github/config', { method: 'DELETE' }),
+
+  listGithubLinks: () => request<{ links: GithubLink[] }>('/github/links'),
+
+  linkGithub: (body: { taskId: string; owner: string; repo: string; type: 'issue' | 'pr'; number: number }) =>
+    request<{ link: GithubLink; taskMovedToDone: boolean }>('/github/links', { method: 'POST', body }),
+
+  unlinkGithub: (id: string) => request<{ ok: true }>(`/github/links/${id}`, { method: 'DELETE' }),
+
+  getGithubRepoInfo: (owner: string, repo: string) =>
+    request<GithubRepoInfo>(`/github/repos/${owner}/${repo}/info`),
+
+  getGithubIssues: (owner: string, repo: string, state: 'open' | 'closed' | 'all', page: number) =>
+    request<{ issues: GithubIssueItem[]; page: number; hasMore: boolean }>(
+      `/github/repos/${owner}/${repo}/issues?state=${state}&page=${page}`,
+    ),
+
+  getGithubPulls: (owner: string, repo: string, state: 'open' | 'closed' | 'all', page: number) =>
+    request<{ pulls: GithubPullItem[]; page: number; hasMore: boolean }>(
+      `/github/repos/${owner}/${repo}/pulls?state=${state}&page=${page}`,
+    ),
+
+  getGithubCommits: (owner: string, repo: string, branch: string | null, page: number) =>
+    request<{ commits: GithubCommitItem[]; page: number; hasMore: boolean }>(
+      `/github/repos/${owner}/${repo}/commits?page=${page}${branch ? `&branch=${encodeURIComponent(branch)}` : ''}`,
+    ),
+
+  getGithubBranches: (owner: string, repo: string) =>
+    request<{ branches: GithubBranchItem[] }>(`/github/repos/${owner}/${repo}/branches`),
+
+  importGithubIssue: (body: { owner: string; repo: string; number: number; projectId?: string | null }) =>
+    request<{ task: { id: string; title: string }; link: GithubLink }>('/github/import-issue', {
+      method: 'POST',
+      body,
+    }),
 }
 
 function toServerProject(input: ProjectInput) {

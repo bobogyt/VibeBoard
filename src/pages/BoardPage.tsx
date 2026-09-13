@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { Alert, Button, Empty, Space } from 'antd'
 import { FieldTimeOutlined, RobotOutlined } from '@ant-design/icons'
 import Board from '../components/Board'
@@ -7,9 +7,10 @@ import TaskTimelineDrawer from '../components/TaskTimelineDrawer'
 import AgentChatDrawer from '../components/AgentChatDrawer'
 import { COLUMN_TITLES } from '../constants'
 import { useBoard } from '../hooks/useBoard'
-import type { ColumnId, Task } from '../types'
+import { api } from '../lib/api'
+import type { ColumnId, GithubLink, Task } from '../types'
 
-type ModalState = { mode: 'create'; column: ColumnId } | { mode: 'edit'; task: Task }
+type ModalState = { mode: 'create'; column: ColumnId } | { mode: 'edit'; taskId: string }
 
 interface BoardPageProps {
   onUnauthorized: () => void
@@ -34,6 +35,55 @@ export default function BoardPage({ onUnauthorized }: BoardPageProps) {
   const [modal, setModal] = useState<ModalState | null>(null)
   const [timelineOpen, setTimelineOpen] = useState(false)
   const [agentOpen, setAgentOpen] = useState(false)
+  const [linksByTask, setLinksByTask] = useState<Record<string, GithubLink[]>>({})
+
+  useEffect(() => {
+    let cancelled = false
+    api
+      .listGithubLinks()
+      .then(({ links }) => {
+        if (cancelled) return
+        const map: Record<string, GithubLink[]> = {}
+        for (const l of links) {
+          ;(map[l.taskId] ??= []).push(l)
+        }
+        setLinksByTask(map)
+      })
+      .catch(() => {
+        /* 关联拉取失败不阻塞看板 */
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
+  const reloadLinks = () => {
+    api
+      .listGithubLinks()
+      .then(({ links }) => {
+        const map: Record<string, GithubLink[]> = {}
+        for (const l of links) {
+          ;(map[l.taskId] ??= []).push(l)
+        }
+        setLinksByTask(map)
+      })
+      .catch(() => {
+        /* 刷新失败保留旧关联 */
+      })
+  }
+
+  // 展示层合并:任务对象附加 githubLinks(保存看板时多余字段会被后端丢弃)
+  const displayBoard = useMemo(() => {
+    const enrich = (tasks: Task[]) =>
+      tasks.map((t) => ({ ...t, githubLinks: linksByTask[t.id] ?? [] }))
+    return { todo: enrich(board.todo), doing: enrich(board.doing), done: enrich(board.done) }
+  }, [board, linksByTask])
+
+  const displayBoardTaskMap = useMemo(() => {
+    const map = new Map<string, Task>()
+    for (const t of [...displayBoard.todo, ...displayBoard.doing, ...displayBoard.done]) map.set(t.id, t)
+    return map
+  }, [displayBoard])
 
   if (loadStatus === 'loading') {
     return <Empty description="正在加载看板…" style={{ marginTop: 96 }} />
@@ -81,9 +131,9 @@ export default function BoardPage({ onUnauthorized }: BoardPageProps) {
         </Space>
       </div>
       <Board
-        board={board}
+        board={displayBoard}
         onAdd={(column) => setModal({ mode: 'create', column })}
-        onEdit={(task) => setModal({ mode: 'edit', task })}
+        onEdit={(task) => setModal({ mode: 'edit', taskId: task.id })}
         onDelete={deleteTask}
         onMoveToColumn={moveTaskToColumn}
         onReorder={reorderTask}
@@ -92,22 +142,30 @@ export default function BoardPage({ onUnauthorized }: BoardPageProps) {
       <TaskTimelineDrawer
         open={timelineOpen}
         onClose={() => setTimelineOpen(false)}
-        board={board}
+        board={displayBoard}
       />
-      <AgentChatDrawer open={agentOpen} onClose={() => setAgentOpen(false)} onBoardChanged={() => void refresh()} />
+      <AgentChatDrawer
+        open={agentOpen}
+        onClose={() => setAgentOpen(false)}
+        onBoardChanged={() => {
+          void refresh()
+          reloadLinks()
+        }}
+      />
       {modal && (
         <TaskModal
-          key={modal.mode === 'edit' ? modal.task.id : modal.column}
+          key={modal.mode === 'edit' ? modal.taskId : modal.column}
           mode={modal.mode}
           columnTitle={modal.mode === 'create' ? COLUMN_TITLES[modal.column] : undefined}
-          task={modal.mode === 'edit' ? modal.task : undefined}
-          board={board}
+          task={modal.mode === 'edit' ? displayBoardTaskMap.get(modal.taskId) : undefined}
+          board={displayBoard}
           onClose={() => setModal(null)}
+          onLinksChanged={reloadLinks}
           onSubmit={(input) => {
             if (modal.mode === 'create') {
               addTask(modal.column, input)
             } else {
-              updateTask(modal.task.id, input)
+              updateTask(modal.taskId, input)
             }
             setModal(null)
           }}

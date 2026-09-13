@@ -1,9 +1,10 @@
 import { useEffect, useState } from 'react'
-import { App as AntdApp, DatePicker, Form, Input, Modal, Select } from 'antd'
+import { App as AntdApp, DatePicker, Form, Input, Modal, Select, Space, Tag } from 'antd'
+import { GithubOutlined } from '@ant-design/icons'
 import dayjs from 'dayjs'
 import { api } from '../lib/api'
 import { COLUMN_TITLES } from '../constants'
-import type { BoardState, Project, Task, TaskInput, TaskPriority } from '../types'
+import type { BoardState, GithubLink, Project, Task, TaskInput, TaskPriority } from '../types'
 
 interface TaskModalProps {
   mode: 'create' | 'edit'
@@ -13,6 +14,8 @@ interface TaskModalProps {
   board?: BoardState
   onClose: () => void
   onSubmit: (input: TaskInput) => void
+  /** GitHub 关联被解除后通知父级刷新关联列表 */
+  onLinksChanged?: () => void
 }
 
 interface FormValues {
@@ -31,7 +34,7 @@ const PRIORITY_OPTIONS: { value: TaskPriority; label: string }[] = [
   { value: 'P3', label: 'P3 - 低' },
 ]
 
-export default function TaskModal({ mode, columnTitle, task, board, onClose, onSubmit }: TaskModalProps) {
+export default function TaskModal({ mode, columnTitle, task, board, onClose, onSubmit, onLinksChanged }: TaskModalProps) {
   const { message } = AntdApp.useApp()
   const [form] = Form.useForm<FormValues>()
   const [projects, setProjects] = useState<Project[]>([])
@@ -73,6 +76,16 @@ export default function TaskModal({ mode, columnTitle, task, board, onClose, onS
       .catch(() => {
         message.error('请检查表单填写')
       })
+  }
+
+  const handleUnlink = async (link: GithubLink) => {
+    try {
+      await api.unlinkGithub(link.id)
+      message.success(`已解除 ${link.type === 'pr' ? 'PR' : 'Issue'} #${link.number} 的关联`)
+      onLinksChanged?.()
+    } catch (e) {
+      message.error(e instanceof Error ? e.message : '解除关联失败')
+    }
   }
 
   const dependencyOptions = (board ? [...board.todo, ...board.doing, ...board.done] : [])
@@ -119,6 +132,26 @@ export default function TaskModal({ mode, columnTitle, task, board, onClose, onS
         {mode === 'edit' && board && (
           <Form.Item label="前置任务(完成后才不阻塞本任务)" name="dependsOn">
             <Select mode="multiple" allowClear placeholder="不设置前置" options={dependencyOptions} />
+          </Form.Item>
+        )}
+        {mode === 'edit' && (task?.githubLinks?.length ?? 0) > 0 && (
+          <Form.Item label="GitHub 关联(新增关联请到项目的 GitHub 抽屉)">
+            <Space size={4} wrap>
+              {task!.githubLinks!.map((l) => (
+                <Tag
+                  key={l.id}
+                  color="purple"
+                  icon={<GithubOutlined />}
+                  closable
+                  onClose={(e) => {
+                    e.preventDefault()
+                    void handleUnlink(l)
+                  }}
+                >
+                  {`${l.type === 'pr' ? 'PR' : 'Issue'} #${l.number}${l.merged ? '(已合并)' : ''}`}
+                </Tag>
+              ))}
+            </Space>
           </Form.Item>
         )}
       </Form>

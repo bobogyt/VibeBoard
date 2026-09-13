@@ -196,6 +196,35 @@ export async function initDb(): Promise<void> {
       KEY idx_user_read_time (user_id, is_read, created_at)
     ) CHARACTER SET utf8mb4
   `)
+  // GitHub 集成:用户级 PAT(密文存储,同模型密钥的 AES-256-GCM 方案)
+  await boot.query(`
+    CREATE TABLE IF NOT EXISTS user_github_configs (
+      user_id CHAR(36) PRIMARY KEY,
+      token TEXT NOT NULL,
+      created_at BIGINT NOT NULL,
+      updated_at BIGINT NOT NULL
+    ) CHARACTER SET utf8mb4
+  `)
+  // GitHub 集成:任务与 Issue/PR 的关联(独立于 tasks 表——saveBoard 是整表替换,加列会丢数据)
+  await boot.query(`
+    CREATE TABLE IF NOT EXISTS task_github_links (
+      id CHAR(36) PRIMARY KEY,
+      user_id CHAR(36) NOT NULL,
+      task_id CHAR(36) NOT NULL,
+      owner VARCHAR(100) NOT NULL,
+      repo VARCHAR(200) NOT NULL,
+      link_type VARCHAR(6) NOT NULL,
+      number INT NOT NULL,
+      title VARCHAR(400) NULL,
+      url VARCHAR(500) NULL,
+      state VARCHAR(10) NULL,
+      merged TINYINT NOT NULL DEFAULT 0,
+      merged_at BIGINT NULL,
+      created_at BIGINT NOT NULL,
+      UNIQUE KEY uk_link (task_id, link_type, number),
+      KEY idx_user (user_id)
+    ) CHARACTER SET utf8mb4
+  `)
   await boot.end()
 }
 

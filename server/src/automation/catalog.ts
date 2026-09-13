@@ -50,6 +50,15 @@ export const AUTOMATIONS: AutomationDef[] = [
     cronLabel: '每天 20:00',
     description: '每天晚上盘点全部逾期任务,以及因前置任务未完成而被阻塞的任务。',
   },
+  {
+    id: 'github-pr-sync',
+    name: 'GitHub PR 同步',
+    type: 'scan',
+    cron: '*/30 * * * *',
+    cronLabel: '每 30 分钟',
+    description:
+      '定期检查任务关联的 GitHub PR:发现已合并时自动把对应任务移至 Done 并更新关联状态。需要项目绑定 GitHub 仓库且任务已关联 PR。',
+  },
 ]
 
 export function getAutomation(id: string): AutomationDef | null {

@@ -2,6 +2,22 @@ export type ColumnId = 'todo' | 'doing' | 'done'
 
 export type TaskPriority = 'P0' | 'P1' | 'P2' | 'P3'
 
+/** 任务关联的 GitHub Issue/PR(服务端独立表维护,随看板加载合并进任务) */
+export interface GithubLink {
+  id: string
+  taskId: string
+  owner: string
+  repo: string
+  type: 'issue' | 'pr'
+  number: number
+  title: string | null
+  url: string | null
+  state: string | null
+  merged: boolean
+  mergedAt: number | null
+  createdAt: number
+}
+
 export interface Task {
   id: string
   title: string
@@ -15,6 +31,8 @@ export interface Task {
   dependsOn: string[]
   createdAt: number
   updatedAt: number
+  /** GitHub 关联(前端展示层合并,后端任务模型不含此字段) */
+  githubLinks?: GithubLink[]
 }
 
 /** 看板状态:每列一个任务数组,数组顺序即卡片显示顺序 */

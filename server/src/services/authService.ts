@@ -1,4 +1,4 @@
-import { randomBytes, scryptSync, timingSafeEqual, randomUUID, scrypt } from 'node:crypto'
+import { randomBytes, timingSafeEqual, randomUUID, scrypt } from 'node:crypto'
 import { promisify } from 'node:util'
 import { pool } from '../db'
 import { setSession, getSession, delSession } from '../cache'

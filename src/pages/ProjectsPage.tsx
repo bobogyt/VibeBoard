@@ -31,6 +31,8 @@ import { PROJECT_STATUSES, PROJECT_STATUS_DOT, PROJECT_STATUS_OPTIONS } from '..
 import type { Project, ProjectInput, ProjectStatus } from '../types'
 import TimelineView from '../components/TimelineView'
 import type { TimelineItemData } from '../components/TimelineView'
+import GithubRepoDrawer from '../components/GithubRepoDrawer'
+import { parseRepoUrl } from '../lib/github'
 
 type ViewMode = 'card' | 'table' | 'timeline'
 
@@ -175,6 +177,16 @@ export default function ProjectsPage() {
   const [view, setView] = useState<ViewMode>('card')
   const [formOpen, setFormOpen] = useState(false)
   const [editing, setEditing] = useState<Project | null>(null)
+  const [githubProject, setGithubProject] = useState<Project | null>(null)
+
+  const reloadProjects = () => {
+    api
+      .listProjects()
+      .then(({ projects: list }) => setProjects(list))
+      .catch(() => {
+        /* 抽屉内转任务后的静默刷新,失败不打扰 */
+      })
+  }
 
   useEffect(() => {
     let cancelled = false
@@ -296,9 +308,18 @@ export default function ProjectsPage() {
     {
       title: '操作',
       key: 'actions',
-      width: 120,
+      width: 150,
       render: (_, p) => (
         <Space>
+          <Tooltip title={parseRepoUrl(p.repoUrl) ? 'GitHub 仓库' : '未绑定 GitHub 仓库(仓库地址需为 github.com 链接)'}>
+            <Button
+              type="text"
+              size="small"
+              icon={<GithubIcon />}
+              disabled={!parseRepoUrl(p.repoUrl)}
+              onClick={() => setGithubProject(p)}
+            />
+          </Tooltip>
           <Button type="text" size="small" icon={<EditOutlined />} onClick={() => openEdit(p)} />
           <Popconfirm
             title="删除该项目?"
@@ -380,11 +401,15 @@ export default function ProjectsPage() {
           }
           extra={
             <Space size={0}>
-              {p.repoUrl && (
-                <a href={p.repoUrl} target="_blank" rel="noreferrer" className="project-repo-link">
-                  <GithubIcon />
-                </a>
-              )}
+              <Tooltip title={parseRepoUrl(p.repoUrl) ? 'GitHub 仓库' : '未绑定 GitHub 仓库'}>
+                <Button
+                  type="text"
+                  size="small"
+                  icon={<GithubIcon />}
+                  disabled={!parseRepoUrl(p.repoUrl)}
+                  onClick={() => setGithubProject(p)}
+                />
+              </Tooltip>
               <Button type="text" size="small" icon={<EditOutlined />} onClick={() => openEdit(p)} />
               <Popconfirm
                 title="删除该项目?"
@@ -455,6 +480,15 @@ export default function ProjectsPage() {
         }}
         onSubmit={handleSubmit}
       />
+      {githubProject && (
+        <GithubRepoDrawer
+          key={githubProject.id}
+          open
+          onClose={() => setGithubProject(null)}
+          project={githubProject}
+          onTaskImported={reloadProjects}
+        />
+      )}
     </div>
   )
 }
