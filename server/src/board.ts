@@ -3,15 +3,22 @@ import { getBoardCache, setBoardCache } from './cache'
 import { httpError } from './http/http-error'
 import { COLUMN_IDS, type BoardState, type ColumnId, type Task } from './types'
 
+/** 看板规模上限:公网环境防止超大载荷拖垮事务/存储/依赖校验 */
+export const MAX_TASKS_PER_BOARD = 500
+export const MAX_DEPENDS_PER_TASK = 50
+
 /** 与前端 types.ts 对应的结构校验;非法返回 null */
 function parseBoardState(input: unknown): BoardState | null {
   if (typeof input !== 'object' || input === null || Array.isArray(input)) return null
   const source = input as Record<string, unknown>
   const columns = (source.columns ?? source) as Record<string, unknown>
   const state: BoardState = { todo: [], doing: [], done: [] }
+  let total = 0
   for (const col of COLUMN_IDS) {
     const list = columns[col]
     if (!Array.isArray(list)) return null
+    if (list.length > MAX_TASKS_PER_BOARD) return null
+    total += list.length
     const normalized: Task[] = []
     for (const item of list) {
       const t = item as Task
@@ -38,10 +45,12 @@ function parseBoardState(input: unknown): BoardState | null {
       const dependsOn = Array.isArray(t.dependsOn)
         ? [...new Set((t.dependsOn as unknown[]).filter((id): id is string => typeof id === 'string' && id.length > 0 && id !== t.id))]
         : []
+      if (dependsOn.length > MAX_DEPENDS_PER_TASK) return null
       normalized.push({ ...t, priority, dueDate, dependsOn })
     }
     state[col] = normalized
   }
+  if (total > MAX_TASKS_PER_BOARD) return null
   return state
 }
 

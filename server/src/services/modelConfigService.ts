@@ -1,6 +1,7 @@
 import { pool } from '../db'
 import { agentConfig } from '../agent/config'
 import { httpError } from '../http/http-error'
+import { decryptSecret, encryptSecret } from '../util/secretBox'
 
 /**
  * 预置供应商目录:用户只需填 API Key + 选模型,baseUrl 由目录内置。
@@ -55,11 +56,14 @@ export async function resolveModelConfig(userId: string): Promise<ResolvedModelC
     const row = list[0]
     const provider = getProvider(row.provider)
     if (!provider) return null
+    // Key 静态加密存储(AES-256-GCM);解密失败(密钥轮换)按未配置处理,提示用户重新保存
+    const apiKey = decryptSecret(row.api_key)
+    if (!apiKey) return null
     return {
       source: 'user',
       provider: row.provider,
       model: row.active_model,
-      apiKey: row.api_key,
+      apiKey,
       baseUrl: provider.baseUrl,
     }
   }
@@ -89,7 +93,8 @@ export async function getAgentModelsInfo(userId: string) {
   const configured: Record<string, { keyHint: string; activeModel: string }> = {}
   let active: { provider: string; model: string; source: 'user' | 'env' } | null = null
   for (const row of list) {
-    configured[row.provider] = { keyHint: maskKey(row.api_key), activeModel: row.active_model }
+    const apiKey = decryptSecret(row.api_key)
+    configured[row.provider] = { keyHint: apiKey ? maskKey(apiKey) : '***', activeModel: row.active_model }
     if (row.is_active === 1) active = { provider: row.provider, model: row.active_model, source: 'user' }
   }
   if (!active && agentConfig.apiKey) {
@@ -116,8 +121,10 @@ export async function saveModelConfig(userId: string, { provider, model, apiKey 
     userId,
     providerId,
   ])
-  const stored = (rows as unknown as Array<{ api_key: string }>)[0]?.api_key
-  const keyToStore = trimmedKey ?? stored ?? null
+  const storedRaw = (rows as unknown as Array<{ api_key: string }>)[0]?.api_key
+  // 复用已存密钥时先解密(库内为密文);解密失败视为密钥失效,要求重新填写
+  const storedDecrypted = storedRaw ? decryptSecret(storedRaw) : null
+  const keyToStore = trimmedKey ?? storedDecrypted
   if (!keyToStore) throw httpError(400, '请填写该供应商的 API Key')
 
   const now = Date.now()
@@ -126,7 +133,7 @@ export async function saveModelConfig(userId: string, { provider, model, apiKey 
      VALUES (?, ?, ?, ?, 1, ?, ?)
      ON DUPLICATE KEY UPDATE api_key = VALUES(api_key), active_model = VALUES(active_model),
        is_active = 1, updated_at = VALUES(updated_at)`,
-    [userId, providerId, keyToStore, model.trim(), now, now],
+    [userId, providerId, encryptSecret(keyToStore), model.trim(), now, now],
   )
   await pool.execute('UPDATE user_model_configs SET is_active = 0 WHERE user_id = ? AND provider <> ?', [
     userId,

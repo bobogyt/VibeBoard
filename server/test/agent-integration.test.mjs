@@ -33,6 +33,7 @@ const modelConfigService = await import('../dist/services/modelConfigService.js'
 const statsService = await import('../dist/services/statsService.js')
 const automationScheduler = await import('../dist/automation/scheduler.js')
 const automationStore = await import('../dist/automation/store.js')
+const { bodyContainsReplacementChar } = await import('../dist/http/encoding-guard.js')
 const { randomUUID } = await import('node:crypto')
 
 registerAllTools()
@@ -282,6 +283,11 @@ const t3 = await taskService.createTask(userId, { title: '已完成任务', stat
     model: 'deepseek-chat',
     apiKey: 'sk-test-1234567890',
   })
+  const [keyRows] = await pool.query(
+    "SELECT api_key FROM user_model_configs WHERE user_id = ? AND provider = 'deepseek'",
+    [userId],
+  )
+  check('安全:API Key 静态加密落库(v1 密文)', String(keyRows[0].api_key).startsWith('v1:'))
   const resolved = await modelConfigService.resolveModelConfig(userId)
   check(
     '模型配置:保存后按用户解析生效',
@@ -693,6 +699,43 @@ const t3 = await taskService.createTask(userId, { title: '已完成任务', stat
   check('统计:操作按工具聚合', mainStats.agent.byTool.length >= 3 && mainStats.agent.byTool.every((t) => t.count >= 1))
 }
 
+/* ---------- 安全加固(看板规模上限) ---------- */
+{
+  const boardMod = await import('../dist/board.js')
+  const now = Date.now()
+  const mk = (i) => ({
+    id: `t${i}`,
+    title: `任务${i}`,
+    description: '',
+    status: 'todo',
+    projectId: null,
+    priority: null,
+    dueDate: null,
+    dependsOn: [],
+    createdAt: now,
+    updatedAt: now,
+  })
+  const huge = { todo: Array.from({ length: 501 }, (_, i) => mk(i)), doing: [], done: [] }
+  let caught400 = false
+  try {
+    await boardMod.saveBoard(userId, huge)
+  } catch (err) {
+    caught400 = err.status === 400
+  }
+  check('安全:超过 500 个任务的看板保存被拒', caught400)
+
+  const manyDeps = { todo: [], doing: [], done: [] }
+  const t = { ...mk(0), dependsOn: Array.from({ length: 51 }, (_, i) => `dep${i}`) }
+  manyDeps.todo.push(t)
+  let dep400 = false
+  try {
+    await boardMod.saveBoard(userId, manyDeps)
+  } catch (err) {
+    dep400 = err.status === 400
+  }
+  check('安全:单任务前置依赖超过 50 个被拒', dep400)
+}
+
 /* ---------- 自动化(开关/只读运行/扫描/通知) ---------- */
 {
   const insertUser = async () => {
@@ -755,6 +798,16 @@ const t3 = await taskService.createTask(userId, { title: '已完成任务', stat
     rejected409 = err.status === 409
   }
   check('自动化:未启用运行返回 409', rejected409)
+}
+
+/* ---------- 编码防护(U+FFFD 守卫) ---------- */
+{
+  check('编码守卫:字符串含替换符被识别', bodyContainsReplacementChar('bad\ufffdname') === true)
+  check('编码守卫:正常中文不误伤', bodyContainsReplacementChar('中文标题✓') === false)
+  check(
+    '编码守卫:嵌套对象/数组递归检测',
+    bodyContainsReplacementChar({ a: { b: ['ok', { c: '\ufffd' }] } }) === true && bodyContainsReplacementChar({ a: ['中文', 1, null] }) === false,
+  )
 }
 
 /* ---------- 清理 ---------- */

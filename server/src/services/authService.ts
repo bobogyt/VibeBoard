@@ -1,23 +1,34 @@
-import { randomBytes, scryptSync, timingSafeEqual, randomUUID } from 'node:crypto'
+import { randomBytes, scryptSync, timingSafeEqual, randomUUID, scrypt } from 'node:crypto'
+import { promisify } from 'node:util'
 import { pool } from '../db'
 import { setSession, getSession, delSession } from '../cache'
 import { httpError } from '../http/http-error'
 
 const USERNAME_RE = /^[\w.-]{3,32}$/
 
-// 用户不存在时也执行一次等价 scrypt 运算,抹平与「密码错误」路径的响应时间差,防止按时序枚举用户名
-const DUMMY_HASH = hashPassword('vibeboard-timing-equalizer')
+const scryptAsync = promisify(scrypt)
 
-function hashPassword(password: string): string {
+/**
+ * 异步 scrypt:公网环境下登录/注册的哈希运算绝不能同步阻塞事件循环
+ * (同步版会被并发登录串行化整个服务,构成 DoS 面)。格式与历史数据完全兼容。
+ */
+
+// 用户不存在时也执行一次等价 scrypt 运算,抹平与「密码错误」路径的响应时间差,防止按时序枚举用户名
+let dummyHashPromise: Promise<string> | null = null
+function getDummyHash(): Promise<string> {
+  return (dummyHashPromise ??= hashPassword('vibeboard-timing-equalizer'))
+}
+
+async function hashPassword(password: string): Promise<string> {
   const salt = randomBytes(16).toString('hex')
-  const hash = scryptSync(password, salt, 64).toString('hex')
+  const hash = ((await scryptAsync(password, salt, 64)) as Buffer).toString('hex')
   return `${salt}:${hash}`
 }
 
-function verifyPassword(password: string, stored: string): boolean {
+async function verifyPassword(password: string, stored: string): Promise<boolean> {
   const [salt, hash] = stored.split(':')
   if (!salt || !hash) return false
-  const candidate = scryptSync(password, salt, 64)
+  const candidate = (await scryptAsync(password, salt, 64)) as Buffer
   const expected = Buffer.from(hash, 'hex')
   return candidate.length === expected.length && timingSafeEqual(candidate, expected)
 }
@@ -37,7 +48,7 @@ async function createUser(username: string, password: string): Promise<string> {
   await pool.execute('INSERT INTO users (id, username, password_hash, created_at) VALUES (?, ?, ?, ?)', [
     id,
     username,
-    hashPassword(password),
+    await hashPassword(password),
     Date.now(),
   ])
   return id
@@ -88,10 +99,10 @@ export async function login(username: unknown, password: unknown): Promise<AuthR
   }
   const user = await findUserByUsername(username)
   if (!user) {
-    verifyPassword(password, DUMMY_HASH)
+    verifyPassword(password, await getDummyHash())
     throw httpError(401, '用户名或密码错误')
   }
-  if (!verifyPassword(password, user.password_hash)) {
+  if (!(await verifyPassword(password, user.password_hash))) {
     throw httpError(401, '用户名或密码错误')
   }
   const token = await issueSession(user.id)

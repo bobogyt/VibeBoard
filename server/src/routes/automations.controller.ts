@@ -9,7 +9,7 @@ import {
   setAutomationEnabled,
 } from '../automation/store'
 import { httpError } from '../http/http-error'
-import { AuthGuard } from '../http/guards'
+import { AuthGuard, AgentRateLimitGuard } from '../http/guards'
 import { UserId } from '../http/authed-request'
 
 @UseGuards(AuthGuard)
@@ -45,8 +45,9 @@ export class AutomationsController {
     return { ok: true, enabled: body.enabled }
   }
 
-  /** 立即执行一次(等同到点触发;未启用时报 409) */
+  /** 立即执行一次(等同到点触发;未启用时报 409)。与交互式 Agent 共享 20 次/小时限速 */
   @Post(':id/run')
+  @UseGuards(AgentRateLimitGuard)
   async runNow(@UserId() userId: string, @Param('id') id: string) {
     const run = await runAutomationForUser(userId, id)
     return {

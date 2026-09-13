@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { pool } from '../db'
 import { setBoardCache } from '../cache'
-import { getBoard, saveBoard, withBoardLock, rowToTask } from '../board'
+import { getBoard, saveBoard, withBoardLock, rowToTask, MAX_DEPENDS_PER_TASK } from '../board'
 import { httpError } from '../http/http-error'
 import { COLUMN_IDS, PRIORITIES, type BoardState, type ColumnId, type Priority, type Task } from '../types'
 
@@ -48,6 +48,7 @@ function requireTask(state: BoardState, taskId: string): TaskLocation {
 function applyDependencies(state: BoardState, taskId: string, dependsOn: unknown): void {
   assert(Array.isArray(dependsOn), 'dependsOn 需为字符串数组')
   const ids = [...new Set(dependsOn as unknown[])]
+  assert(ids.length <= MAX_DEPENDS_PER_TASK, `前置任务数量不能超过 ${MAX_DEPENDS_PER_TASK} 个`)
   assert(ids.every((id) => typeof id === 'string' && id.length > 0), 'dependsOn 需为非空字符串数组')
   assert(!ids.includes(taskId), '前置任务不能包含自身')
 

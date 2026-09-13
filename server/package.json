@@ -2,6 +2,9 @@
   "name": "vibeboard-server",
   "private": true,
   "version": "0.0.0",
+  "overrides": {
+    "multer": "^2.3.0"
+  },
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "watch": "tsc -p tsconfig.json --watch",
